@@ -2,7 +2,7 @@ use std::env;
 use std::error::Error;
 use std::path::{Path, PathBuf};
 
-use y2synth_drumsrnn_weights::{load_checkpoint, lstm::BasicLstmCell};
+use y2synth_drumsrnn_weights::{attention::{softmax, AttentionRnn}, load_checkpoint, lstm::BasicLstmCell};
 
 fn run() -> Result<(), Box<dyn Error>> {
     let mut args = env::args_os().skip(1);
@@ -73,7 +73,21 @@ fn run() -> Result<(), Box<dyn Error>> {
         );
     }
     println!("OK: 3 pretrained LSTM layers produced finite values for zero input.");
-    println!("Not implemented: attention, full DrumsRNN inference, pattern generation, audio, Y2 support.");
+    // First genuine neural-network forward step for the silent bootstrap class.
+    // The returned logits must later be compared numerically to Magenta.js.
+    let network = AttentionRnn::from_checkpoint(&model)?;
+    let mut state = network.zero_state();
+    network.step(0, 0, &mut state)?;
+    let probabilities = softmax(state.logits(), 1.0)?;
+    let mut ranked: Vec<usize> = (0..probabilities.len()).collect();
+    ranked.sort_unstable_by(|&a, &b| probabilities[b].total_cmp(&probabilities[a]));
+    println!("Silent bootstrap -> 512 next-event class logits (unverified reference):");
+    for &index in ranked.iter().take(5) {
+        println!("  class {index:3}: probability {:.6}", probabilities[index]);
+    }
+    println!("OK: one complete Rust LSTM+attention+output forward step computed finite logits.");
+    println!("Not yet verified: numerical agreement with Magenta.js.");
+    println!("Not yet implemented: autonomous sampling/decoding, audio, Y2 support.");
     Ok(())
 }
 
