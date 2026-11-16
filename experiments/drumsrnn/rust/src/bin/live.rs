@@ -153,7 +153,7 @@ fn show_pattern(pattern: &GeneratedPattern, seed: u64) {
     println!("AI seed: {seed}; drum hits: {}", pattern.hits.len());
     for (bit, pitch) in DRUM_PITCHES.iter().enumerate() {
         let row: String = pattern.classes.iter()
-            .map(|class| if class & (1usize << bit) != 0 { 'X' } else { '.' })
+            .map(|class| if *class & (1usize << bit) != 0 { 'X' } else { '.' })
             .collect();
         println!("  MIDI {pitch:>2}: {row}");
     }
@@ -199,6 +199,9 @@ fn run() -> Result<(), Box<dyn Error>> {
         SampleFormat::F32 => build_stream::<f32>(&device, config, receiver, sequencer)?,
         SampleFormat::I16 => build_stream::<i16>(&device, config, receiver, sequencer)?,
         SampleFormat::U16 => build_stream::<u16>(&device, config, receiver, sequencer)?,
+        SampleFormat::I32 => build_stream::<i32>(&device, config, receiver, sequencer)?,
+        SampleFormat::U32 => build_stream::<u32>(&device, config, receiver, sequencer)?,
+        SampleFormat::F64 => build_stream::<f64>(&device, config, receiver, sequencer)?,
         other => return Err(format!("Unsupported default audio sample format: {other:?}").into()),
     };
     // Initial pattern is cued, but playback starts only with 'play'.
@@ -269,5 +272,20 @@ fn main() {
     if let Err(error) = run() {
         eprintln!("ERROR: {error}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tempo_validation_rejects_nan_and_out_of_range() {
+        for bpm in [40.0, 120.0, 240.0] {
+            assert!(validate_bpm(bpm).is_ok());
+        }
+        for bpm in [0.0, 39.9, 240.1, f32::NAN, f32::INFINITY] {
+            assert!(validate_bpm(bpm).is_err());
+        }
     }
 }
