@@ -76,7 +76,7 @@ fn valid_shard_name(name: &str) -> bool {
         && !name.contains('\\')
         && !name.contains(':')
         && Path::new(name).components().count() == 1
-        && Path::new(name).file_name().is_some_and(|part| part == name)
+        && Path::new(name).file_name().is_some_and(|part| part.to_str() == Some(name))
 }
 
 fn weight_count(spec: &WeightSpec) -> io::Result<usize> {
@@ -180,6 +180,7 @@ pub fn load_checkpoint(model_dir: &Path) -> io::Result<Checkpoint> {
 
     let mut tensors = BTreeMap::new();
     let mut visited_shards = HashSet::new();
+    let mut visited_tensors = HashSet::new();
 
     for (group_index, group) in groups.iter().enumerate() {
         if group.paths.is_empty() || group.weights.is_empty() {
@@ -207,14 +208,7 @@ pub fn load_checkpoint(model_dir: &Path) -> io::Result<Checkpoint> {
         let mut expected_bytes = 0u64;
         let mut counts = Vec::with_capacity(group.weights.len());
         for spec in &group.weights {
-            if tensors.contains_key(&spec.name)
-                || group
-                    .weights
-                    .iter()
-                    .filter(|candidate| candidate.name == spec.name)
-                    .count()
-                    != 1
-            {
+            if !visited_tensors.insert(spec.name.clone()) {
                 return Err(invalid(format!("Duplicate tensor: {}", spec.name)));
             }
             let count = weight_count(spec)?;
