@@ -129,22 +129,23 @@ will contain silence; run the stochastic sampler again.
 **Validation status:** new WAV code and its 5 unit tests have been committed,
 but have **not yet been compiled or auditioned** on the user's Mac.
 
-## Live drum machine (new, Mac verification pending)
+## Live drum machine (lock-free revision, Mac verification pending)
 
 An interactive experimental macOS output app has been added:
-- portable `src/sequencer.rs` prepares 16-step loops, switches a new buffer on the next bar, and fades transitions;
-- `src/bin/live.rs` opens the default output device with `cpal 0.18.2` (CoreAudio on macOS), sends precomputed mono samples to all output channels, and accepts commands from stdin;
-- model inference, pattern generation and loop rendering run on the CLI/control thread, never inside the audio callback.
+- portable `src/sequencer.rs` prepares one 16-step PCM loop on the control thread;
+- **`src/realtime.rs`** is the actual audio state machine: it owns a `triple_buffer::Output<PreparedLoop>`, an atomic play/stop flag, and a preallocated 15-ms crossfade scratch buffer;
+- `src/bin/live.rs` uses `cpal 0.18.2` and `triple_buffer 9.0.0` to deliver precomputed mono samples to the CoreAudio stream;
+- model inference, pattern generation, `Vec` creation/replacement and loop rendering are confined to the control thread. On the callback, only bounded memory copy, sample reads and atomic operations are performed.
 
-**Code status:** the user reported the first live prototype works on Mac on 2026-11-17. Detailed verification of each interactive command, regression tests and real-time safety remains pending. The `sequencer.rs` module is now exported from `lib.rs`, so its unit tests will run with ordinary `cargo test`; the live binary needs the opt-in feature `live-audio`.
+**Code status:** the user reported that the previous live prototype worked on Mac on 2026-11-17. The **new triple-buffer-based audio path** is committed but **has not yet been recompiled or auditioned**. The exact tests/commands below must be run again on Mac. The `sequencer.rs` module is exported unconditionally; `realtime.rs` and the live binary are enabled by `--features live-audio` and their tests require that feature.
 
 From the Y2Synth repository root:
 
 ```bash
 git pull --ff-only
 
-# First build resolves CPAL and updates the existing Cargo.lock.
-# DO NOT use --locked until you have committed the updated lockfile.
+# First build resolves the new triple_buffer dependency and updates Cargo.lock.
+# CPAL was already locked; DO NOT use --locked until the updated lockfile is committed.
 cargo test --manifest-path experiments/drumsrnn/rust/Cargo.toml \
   --features live-audio
 
@@ -168,4 +169,4 @@ quit
 
 After successful compilation and testing, commit the changed `experiments/drumsrnn/rust/Cargo.lock` to `main` (do **not** add downloaded model weights or WAV files). Then normal commands may again use `--locked`.
 
-**Real-time caveat:** `std::sync::mpsc` command polling and freeing old buffers in the audio callback may still involve internal locks or allocation/deallocation. This is an exploratory preview, not a formally RT-safe audio engine. Further hardening, device routing, xrun/latency benchmarks, and ARM/Y2Linux compatibility remain future work.
+**Real-time caveat:** the rewritten callback no longer uses `std::sync::mpsc` or frees previously active `Vec<f32>` buffers; the `Output<PreparedLoop>` triple buffer switches ownership atomically and old allocations are freed only when the producer replaces its own slot on the control thread. Crossfade samples are copied into a fixed preallocated 15-ms buffer. This remains an experimental design until actual audio dropout/latency/CPU tests on Mac; device routing, CoreAudio behavior, and ARM/Y2Linux compatibility are not yet validated.
