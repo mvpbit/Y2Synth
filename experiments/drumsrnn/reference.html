@@ -24,7 +24,9 @@
   <p>Primer: 16 steps. Continuation: 16 steps. Sampling: argmax (no randomness).</p>
   <label for="primerSelect">Input pattern:</label>
   <select id="primerSelect"><option value="regular">Regular groove (original)</option><option value="syncopated">Syncopated groove (control test)</option></select>
-  <p class="secondary">Switch the input pattern to check whether the continuation reacts to its context.</p>
+  <label for="samplingSelect">Sampling:</label>
+  <select id="samplingSelect"><option value="argmax">Argmax (deterministic)</option><option value="1.0">Temperature 1.0</option><option value="1.2">Temperature 1.2</option></select>
+  <p class="secondary">Use temperature 1.0 or 1.2 to test whether the trained model produces variations instead of copying the primer.</p>
   <button id="run">Generate reference</button>
   <button id="save" disabled>Save JSON</button>
   <p id="status" role="status">Ready.</p>
@@ -34,6 +36,7 @@
     const runButton = document.getElementById("run");
     const saveButton = document.getElementById("save");
     const primerSelect = document.getElementById("primerSelect");
+    const samplingSelect = document.getElementById("samplingSelect");
     const status = document.getElementById("status");
     const result = document.getElementById("result");
     const checkpoint = new URL("./models/drum_kit_rnn_tfjs", window.location.href).href.replace(/\/$/, "");
@@ -83,6 +86,7 @@
       runButton.disabled = true;
       saveButton.disabled = true;
       primerSelect.disabled = true;
+      samplingSelect.disabled = true;
       savedResult = null;
       result.textContent = "Loading...";
       let model;
@@ -96,12 +100,14 @@
         await model.initialize();
         const loadMs = performance.now() - loadStart;
 
-        status.textContent = "Generating 16 steps with argmax...";
+        const samplingId = samplingSelect.value;
+        const temperature = samplingId === "argmax" ? undefined : Number(samplingId);
+        status.textContent = "Generating 16 steps with " + samplingId + "...";
         const genStart = performance.now();
         const primerId = primerSelect.value;
         const selectedPrimer = primers[primerId];
         if (!selectedPrimer) throw new Error("Unknown input pattern");
-        const response = await model.continueSequenceAndReturnProbabilities(selectedPrimer, 16);
+        const response = await model.continueSequenceAndReturnProbabilities(selectedPrimer, 16, temperature);
         const sequence = await response.sequence;
         const generationMs = performance.now() - genStart;
         const probabilities = response.probs.map(row => Array.from(row));
@@ -119,7 +125,8 @@
           experiment: "Y2Synth Magenta.js DrumsRNN reference",
           implementation: "@magenta/music@1.23.1",
           checkpoint: "drum_kit_rnn_tfjs",
-          sampling: "argmax; no temperature",
+          sampling: samplingId,
+          tfjsBackend: (window.mm.tf && window.mm.tf.getBackend && window.mm.tf.getBackend()) || "unknown",
           measuredOn: navigator.userAgent,
           timestamp: new Date().toISOString(),
           loadMs: Number(loadMs.toFixed(2)),
@@ -136,6 +143,7 @@
           "Model initialization: " + loadMs.toFixed(1) + " ms",
           "Generation (16 steps): " + generationMs.toFixed(1) + " ms",
           "Primer: " + primerId + " (" + inputHits.length + " hits)",
+          "Sampling: " + samplingId,
           "Generated hits: " + notes.length,
           "Generated continuation equals primer: " + (repeatsPrimer ? "YES" : "NO"),
           "Mean maximum class probability: " + meanTopProbability.toFixed(4),
@@ -152,6 +160,7 @@
         if (model) model.dispose();
         runButton.disabled = false;
         primerSelect.disabled = false;
+        samplingSelect.disabled = false;
       }
     });
 
