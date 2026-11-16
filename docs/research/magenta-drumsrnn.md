@@ -289,3 +289,28 @@ cargo run --release --manifest-path experiments/drumsrnn/rust/Cargo.toml
 ```
 
 **Важно:** Rust toolchain отсутствует в текущем инструментальном окружении ассистента, поэтому исходники пока не были скомпилированы; любые ошибки компиляции/тестов будут исправлены после первого локального прогона. Измерения производительности, анализ пикового RAM, LSTM, attention, сэмплирование и генерация с нуля в Rust **не реализованы**. Библиотека пока предназначена для Mac, не для запуска на Y2. `Cargo.lock` будет создан при первой локальной сборке Cargo, после чего его следует коммитить для воспроизводимости.
+
+## Эксперимент 9 — Rust загрузка весов подтверждена, добавлен BasicLSTMCell (2026-11-17)
+
+**Уже проверено на Mac (по выводу пользователя):**
+- `cargo test --manifest-path experiments/drumsrnn/rust/Cargo.toml`: **5/5 tests passed** для первоначального checkpoint loader.
+- `cargo run --release --manifest-path experiments/drumsrnn/rust/Cargo.toml`: успешно.
+- Реальные веса: `attentionLength=32`, **16 тензоров**, **2,967,850 float32**, **11,871,400 байт**.
+- Фактические значения из `fully_connected/biases`: `[4.8072643, -1.462866, -1.1874784, -2.1494598]`.
+- Это тестировало **разбор весов**, но ещё не вычисления нейросети.
+
+**Добавлено в ветку после этих проверок (код ещё не тестировался на Mac):**
+- `experiments/drumsrnn/rust/src/lstm.rs` — отдельное вычисление **одного шага** `BasicLSTMCell` с матрицей TF1 `[input+hidden, 4*hidden]`, порядком вентилей `i, j, f, o`, `forget_bias=1.0`, `tanh` и `sigmoid`. Реализация специально простая: скалярные вычисления без аппаратной оптимизации, переиспользование временных буферов без динамических аллокаций внутри шага.
+- Автотесты с искусственными весами проверяют размерности, порядок gate-векторов, runtime forget bias, влияние предыдущего hidden-state, отсутствие `NaN` во входе. Эти тесты **не доказывают численную эквивалентность с TensorFlow**.
+- Консольный `cargo run --release` после чтения реальных весов дополнительно создаёт каждый из 3 pretrained LSTM layers и исполняет по одному шагу на **искусственном нулевом входе**. Это позволяет проверить действительные матрицы/размерности/конечность результата, но не является генерацией MIDI.
+- Зафиксирован источник формул: [TensorFlow 1 BasicLSTMCell source](https://github.com/tensorflow/tensorflow/blob/master/tensorflow/python/keras/layers/legacy_rnn/rnn_cell_impl.py).
+
+Запуск из корня репозитория:
+
+```bash
+git pull --ff-only
+cargo test --manifest-path experiments/drumsrnn/rust/Cargo.toml
+cargo run --release --manifest-path experiments/drumsrnn/rust/Cargo.toml
+```
+
+**Следующий рубеж:** реализовать точную структуру `AttentionCellWrapper`, контекстные входы, шаги рекуррентного состояния 3 слоёв, output projection и сопоставить распределения классов с Magenta.js. Без этого Rust-движок **не генерирует** барабанные паттерны и не является готовым inference.
