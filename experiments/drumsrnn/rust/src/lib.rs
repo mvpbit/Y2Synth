@@ -6,6 +6,8 @@ pub mod lstm;
 pub mod attention;
 pub mod generation;
 pub mod audio;
+pub mod kit;
+pub mod dsp;
 pub mod sequencer;
 #[cfg(feature = "live-audio")]
 pub mod realtime;
