@@ -7,6 +7,8 @@ pub mod attention;
 pub mod generation;
 pub mod audio;
 pub mod sequencer;
+#[cfg(feature = "live-audio")]
+pub mod realtime;
 
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashSet};
