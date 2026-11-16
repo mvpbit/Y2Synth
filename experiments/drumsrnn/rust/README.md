@@ -137,19 +137,18 @@ An interactive experimental macOS output app has been added:
 - `src/bin/live.rs` uses `cpal 0.18.2` and `triple_buffer 9.0.0` to deliver precomputed mono samples to the CoreAudio stream;
 - model inference, pattern generation, `Vec` creation/replacement and loop rendering are confined to the control thread. On the callback, only bounded memory copy, sample reads and atomic operations are performed.
 
-**Code status:** the user reported that the previous live prototype worked on Mac on 2026-11-17. The **new triple-buffer-based audio path** is committed but **has not yet been recompiled or auditioned**. The exact tests/commands below must be run again on Mac. The `sequencer.rs` module is exported unconditionally; `realtime.rs` and the live binary are enabled by `--features live-audio` and their tests require that feature.
+**Code status:** the user confirmed the triple-buffer live prototype worked on Mac on 2026-11-17. Since then a tunable drum DSP and an Application Controller / menu bridge have been added; **these latest changes have not yet been compiled or auditioned on Mac**. The commands below need rerunning. The `sequencer.rs` module is exported unconditionally; `realtime.rs` and the live binary are enabled by `--features live-audio` and their tests require that feature.
 
 From the Y2Synth repository root:
 
 ```bash
 git pull --ff-only
 
-# First build resolves the new triple_buffer dependency and updates Cargo.lock.
-# CPAL was already locked; DO NOT use --locked until the updated lockfile is committed.
-cargo test --manifest-path experiments/drumsrnn/rust/Cargo.toml \
+# Dependencies are already committed to Cargo.lock in main.
+cargo test --locked --manifest-path experiments/drumsrnn/rust/Cargo.toml \
   --features live-audio
 
-cargo run --release --manifest-path experiments/drumsrnn/rust/Cargo.toml \
+cargo run --release --locked --manifest-path experiments/drumsrnn/rust/Cargo.toml \
   --features live-audio --bin live -- --bpm 120 --temperature 1.2
 ```
 
@@ -167,6 +166,40 @@ quit
 
 `play` starts a repeating 16-step loop, `stop` fades out, `bpm N` prepares the existing groove at a new tempo, and `regenerate` asks the AI for a completely new pattern *without user MIDI input*. New buffers are scheduled on a bar boundary when playback is running. There is no intermediate WAV file.
 
-After successful compilation and testing, commit the changed `experiments/drumsrnn/rust/Cargo.lock` to `main` (do **not** add downloaded model weights or WAV files). Then normal commands may again use `--locked`.
+Current `Cargo.lock` is already committed in `main`. These Application Controller changes require no new dependencies; do **not** commit downloaded model weights or WAV files.
 
 **Real-time caveat:** the rewritten callback no longer uses `std::sync::mpsc` or frees previously active `Vec<f32>` buffers; the `Output<PreparedLoop>` triple buffer switches ownership atomically and old allocations are freed only when the producer replaces its own slot on the control thread. Crossfade samples are copied into a fixed preallocated 15-ms buffer. This remains an experimental design until actual audio dropout/latency/CPU tests on Mac; device routing, CoreAudio behavior, and ARM/Y2Linux compatibility are not yet validated.
+
+## PLAY menu integration (new; needs Mac verification)
+
+`src/ui.rs` models PLAY-first navigation; `src/project.rs` stores three independent typed tracks with shared BPM; `src/application.rs` connects menu commands to the real DrumsRNN, a RAM-only saved snapshot, and `AudioPort`. The synth slots are explicitly unimplemented (not synthetic placeholders).
+
+- AI → Generate Track → Drums generates and queues new PCM using the existing model. The current kit stays intact.
+- Returning Home → PLAY queues the latest saved bar and starts playback, **without calling AI again**.
+- AI → Generate Track → Synth 1/2 and AI → Generate All return `NotImplemented` and leave the saved project intact.
+- Changing `bpm` or `level/tone/decay` preserves the pattern and saves updated settings in memory. All files and DSP work remain on the control thread.
+
+Test the temporary wheel simulator in `live`:
+
+```text
+menu
+center
+next
+center
+next
+center
+next
+next
+center
+back
+back
+back
+wheel-play
+stop
+play
+quit
+```
+
+`center` selects/enters, `next/prev` changes focus, `back` returns up one level, and `wheel-play` triggers PLAY on Home. Regular `play`, `regenerate`, `bpm` and `kit` commands still work as shortcuts. Session state is saved **only in RAM**; it does not survive closing the process.
+
+Unit tests cover the full menu→AI drums→saved PLAY loop, generation/queue error rollback, kit/tempo preservation and unavailable synth actions. The latest integration still needs actual `cargo test` + audio playback verification on the user's Mac.
