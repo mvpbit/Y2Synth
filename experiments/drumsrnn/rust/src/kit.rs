@@ -95,7 +95,7 @@ pub fn drum_index(pitch: u8) -> Option<usize> {
 
 /// Recognizes short names suitable for terminal input, plus common aliases.
 pub fn pitch_by_name(name: &str) -> Option<u8> {
-    let normalized = name.trim().to_ascii_lowercase().replace(['-', '_'], "");
+    let normalized = name.trim().to_ascii_lowercase().replace('-', "").replace('_', "");
     let index = match normalized.as_str() {
         "kick" | "bd" => 0,
         "snare" | "sd" => 1,
