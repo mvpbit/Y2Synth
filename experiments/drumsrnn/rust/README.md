@@ -110,8 +110,7 @@ temperature sampling is not expected to match the browser event-for-event.
 
 **Validation status:** Rust loader/LSTM/first attention-step passed all 14
 existing tests and matched the first-step Magenta.js top five probabilities
-to six decimals. **New generation module and CLI have not yet been compiled,
-run, or compared with the browser on Mac.** Do not interpret a successful
+to six decimals. **Generation module and CLI have now been compiled and run on Mac:** a 16-step, 9-hit pattern was generated in **40.2 ms** at temperature 1.2 (one uncontrolled timing sample). **Multi-step probabilities have not yet been compared with the browser.** Do not interpret a successful
 build as proof of multi-step numerical equivalence. Compare browser
 `reference.html` in *From scratch / Argmax* mode: it now prints
 sampled class IDs and top five probabilities at steps 0, 1, 7, and 15.
