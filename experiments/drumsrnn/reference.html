@@ -161,6 +161,8 @@
           sampledClassIds[step] |= (1 << bit);
         }
         const firstTopFive = selectedProbabilities[0].topFive;
+        const classGrid = sampledClassIds.map(value => value === 0 ? "." : "X").join("");
+        const emptyPattern = sampledClassIds.every(value => value === 0);
 
         savedResult = {
           experiment: "Y2Synth Magenta.js DrumsRNN reference",
@@ -184,7 +186,7 @@
           sampledClassIds,
           probabilities,
         };
-        status.textContent = notes.length === 0
+        status.textContent = emptyPattern
           ? (samplingId === "argmax"
              ? "Argmax completed: 16 silent steps. This is a valid deterministic model output, not a generation failure. Compare the class IDs and probabilities below."
              : "Generation completed with 0 hits (silent output). Try sampling again or raise temperature.")
@@ -196,6 +198,11 @@
           "Input MIDI hits: " + inputHits.length,
           "Sampling: " + samplingId,
           "Generated hits: " + notes.length,
+          emptyPattern
+            ? "SILENCE: all 16 steps are rests. Generation completed; nothing can be played."
+            : "Generated non-empty pattern; preview playback is available.",
+          "16-step activity grid (. = silence, X = at least one hit):",
+          classGrid,
           "Output equals input: " + (isFromScratch ? "not applicable (no user input)" : (repeatsPrimer ? "YES" : "NO")),
           "Mean maximum class probability: " + meanTopProbability.toFixed(4),
           "Sampled class IDs (16 steps):",
