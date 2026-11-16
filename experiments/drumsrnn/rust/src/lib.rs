@@ -302,6 +302,27 @@ mod tests {
     }
 
     #[test]
+    fn keeps_manifest_tensor_order_with_multiple_tensors() {
+        let folder = TempDir::new().unwrap();
+        let mut bytes = Vec::new();
+        for value in [10.0f32, -3.0, 7.5] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        write_fixture(&folder.0, "[3]", &bytes[..7], &bytes[7..]);
+        fs::write(
+            folder.0.join("weights_manifest.json"),
+            r#"[{"paths":["part1","part2"],"weights":[
+                {"name":"first","shape":[1],"dtype":"float32"},
+                {"name":"second","shape":[2],"dtype":"float32"}
+            ]}]"#,
+        )
+        .unwrap();
+        let checkpoint = load_checkpoint(&folder.0).unwrap();
+        assert_eq!(checkpoint.tensors["first"].values, vec![10.0]);
+        assert_eq!(checkpoint.tensors["second"].values, vec![-3.0, 7.5]);
+    }
+
+    #[test]
     fn rejects_manifest_with_incorrect_byte_count() {
         let folder = TempDir::new().unwrap();
         write_fixture(&folder.0, "[4]", &[0; 5], &[0; 7]);
