@@ -1,0 +1,26 @@
+# Служебные файлы macOS
+.DS_Store
+._*
+
+# Результаты сборки Rust; Cargo.lock приложения сохраняется в Git
+/target/
+
+# Локальные результаты сборок и проверок
+/build/
+/dist/
+/coverage/
+*.log
+*.tmp
+*.swp
+*~
+
+# Локальные настройки и секреты
+.env
+.env.*
+!.env.example
+
+# Крупные и внешние артефакты: не добавлять автоматически
+/artifacts/
+/models/weights/
+/firmware/
+/backups/
