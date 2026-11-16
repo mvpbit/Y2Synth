@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Y2Synth — generate drum patterns from scratch</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, -apple-system, sans-serif; }
+    body { max-width: 760px; margin: 40px auto; padding: 0 18px; line-height: 1.5; }
+    h1 { margin-bottom: .15rem; }
+    .secondary { color: #a6a6a6; }
+    button { font: inherit; padding: .65rem 1rem; margin: .6rem .5rem .6rem 0; }
+    button:disabled { opacity: .5; }
+    pre { background: #191919; border: 1px solid #555; border-radius: 8px; padding: 1rem; overflow: auto; max-height: 420px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    code { font-size: .95em; }
+  </style>
+  <!-- Pinned upstream Magenta.js library. Network is needed only for this JS bundle. -->
+  <script src="https://cdn.jsdelivr.net/npm/@magenta/music@1.23.1"></script>
+</head>
+<body>
+  <h1>Y2Synth · Generate from scratch</h1>
+  <p class="secondary">Reference inference on Mac, not Rust or Y2. Loads weights from this local HTTP server.</p>
+  <p>Checkpoint: <code>models/drum_kit_rnn_tfjs/</code></p>
+  <p><strong>Default: no human-written drum groove.</strong> A single silent step is an internal bootstrap input, not a user pattern. The model generates 16 new steps.</p>
+  <label for="primerSelect">Generation mode:</label>
+  <select id="primerSelect"><option value="scratch">From scratch — no user input</option><option value="regular">Diagnostic: regular primer</option><option value="syncopated">Diagnostic: syncopated primer</option></select>
+  <label for="samplingSelect">Sampling:</label>
+  <select id="samplingSelect"><option value="argmax">Argmax (deterministic)</option><option value="1.0" selected>Temperature 1.0</option><option value="1.2">Temperature 1.2</option></select>
+  <p class="secondary">Temperature 1.0/1.2 samples varied rhythms. Argmax is for deterministic numerical comparisons; from a silent seed it may output 16 silent steps because silence is the most probable class.</p>
+  <button id="run">Generate pattern</button>
+  <button id="play" disabled>▶ Preview groove</button>
+  <button id="save" disabled>Save JSON</button>
+  <p class="secondary">Preview uses simple synthesized drum sounds in Web Audio; it is not Y2Synth's future sound engine.</p>
+  <p id="status" role="status">Ready.</p>
+  <pre id="result">No result yet.</pre>
+  <script>
+    // Separate small script so parse errors in the main script become visible in-page.
+    window.addEventListener("error", function (event) {
+      const statusNode = document.getElementById("status");
+      const outputNode = document.getElementById("result");
+      if (statusNode) statusNode.textContent = "JavaScript error: " + event.message;
+      if (outputNode) outputNode.textContent =
+        (event.filename || "inline script") + ":" + event.lineno + ":" + event.colno;
+    });
+  </script>
+  <script>
+    "use strict";
+    const runButton = document.getElementById("run");
+    const saveButton = document.getElementById("save");
+    const playButton = document.getElementById("play");
+    const primerSelect = document.getElementById("primerSelect");
+    const samplingSelect = document.getElementById("samplingSelect");
+    const status = document.getElementById("status");
+    const result = document.getElementById("result");
+    const checkpoint = new URL("./models/drum_kit_rnn_tfjs", window.location.href).href.replace(/\/$/, "");
+    let savedResult = null;
+    let latestSequence = null;
+    let audioContext = null;
+    let masterGain = null;
+    let noiseBuffer = null;
+    let playingUntil = 0;
+
+    const primer = {
+      notes: [
+        {pitch: 36, quantizedStartStep: 0, quantizedEndStep: 1, isDrum: true, velocity: 100},
+        {pitch: 42, quantizedStartStep: 0, quantizedEndStep: 1, isDrum: true, velocity: 100},
+        {pitch: 42, quantizedStartStep: 2, quantizedEndStep: 3, isDrum: true, velocity: 100},
+        {pitch: 38, quantizedStartStep: 4, quantizedEndStep: 5, isDrum: true, velocity: 100},
+        {pitch: 42, quantizedStartStep: 4, quantizedEndStep: 5, isDrum: true, velocity: 100},
+        {pitch: 42, quantizedStartStep: 6, quantizedEndStep: 7, isDrum: true, velocity: 100},
+        {pitch: 36, quantizedStartStep: 8, quantizedEndStep: 9, isDrum: true, velocity: 100},
+        {pitch: 42, quantizedStartStep: 8, quantizedEndStep: 9, isDrum: true, velocity: 100},
+        {pitch: 42, quantizedStartStep: 10, quantizedEndStep: 11, isDrum: true, velocity: 100},
+        {pitch: 38, quantizedStartStep: 12, quantizedEndStep: 13, isDrum: true, velocity: 100},
+        {pitch: 42, quantizedStartStep: 12, quantizedEndStep: 13, isDrum: true, velocity: 100},
+        {pitch: 42, quantizedStartStep: 14, quantizedEndStep: 15, isDrum: true, velocity: 100},
+      ],
+      quantizationInfo: {stepsPerQuarter: 4},
+      tempos: [{time: 0, qpm: 120}],
+      timeSignatures: [{time: 0, numerator: 4, denominator: 4}],
+      totalQuantizedSteps: 16,
+    };
+
+    const syncopatedNotes = [
+      [0, 36], [1, 42], [3, 42], [4, 38], [5, 42],
+      [7, 36], [7, 42], [9, 42], [10, 36], [11, 42],
+      [12, 38], [13, 42], [15, 42],
+    ].map(([step, pitch]) => ({
+      pitch, quantizedStartStep: step, quantizedEndStep: step + 1,
+      isDrum: true, velocity: 100,
+    }));
+    const silentSeed = {
+      notes: [],
+      quantizationInfo: {stepsPerQuarter: 4},
+      tempos: [{time: 0, qpm: 120}],
+      timeSignatures: [{time: 0, numerator: 4, denominator: 4}],
+      totalQuantizedSteps: 1,
+    };
+    const primers = {
+      scratch: silentSeed,
+      regular: primer,
+      syncopated: {...primer, notes: syncopatedNotes},
+    };
+
+    function hitPairs(sequence) {
+      return (sequence.notes || [])
+        .map(n => [n.quantizedStartStep, n.pitch])
+        .sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    }
+
+    runButton.addEventListener("click", async () => {
+      runButton.disabled = true;
+      saveButton.disabled = true;
+      primerSelect.disabled = true;
+      samplingSelect.disabled = true;
+      savedResult = null;
+      latestSequence = null;
+      playButton.disabled = true;
+      result.textContent = "Loading...";
+      let model;
+      try {
+        if (!window.mm || typeof window.mm.MusicRNN !== "function") {
+          throw new Error("Magenta.js did not load; check browser network/CDN.");
+        }
+        status.textContent = "Loading local checkpoint...";
+        model = new window.mm.MusicRNN(checkpoint);
+        const loadStart = performance.now();
+        await model.initialize();
+        const loadMs = performance.now() - loadStart;
+
+        const samplingId = samplingSelect.value;
+        const temperature = samplingId === "argmax" ? undefined : Number(samplingId);
+        status.textContent = "Generating 16 steps with " + samplingId + "...";
+        const genStart = performance.now();
+        const primerId = primerSelect.value;
+        const selectedPrimer = primers[primerId];
+        if (!selectedPrimer) throw new Error("Unknown input pattern");
+        const response = await model.continueSequenceAndReturnProbabilities(selectedPrimer, 16, temperature);
+        const sequence = await response.sequence;
+        const generationMs = performance.now() - genStart;
+        const probabilities = response.probs.map(row => Array.from(row));
+        if (probabilities.length !== 16 || probabilities.some(row => row.length !== 512)) {
+          throw new Error("Unexpected probability matrix shape");
+        }
+
+        const notes = hitPairs(sequence);
+        const inputHits = hitPairs(selectedPrimer);
+        const isFromScratch = primerId === "scratch";
+        const repeatsPrimer = JSON.stringify(notes) === JSON.stringify(inputHits);
+        const maxProbs = probabilities.map(row => Math.max(...row));
+        const meanTopProbability = maxProbs.reduce((a, b) => a + b, 0) / maxProbs.length;
+        // First-step probabilities are deterministic for the same silent seed,
+        // even when subsequent sampled steps use randomness.
+        const diagnosticSteps = [0, 1, 7, 15];
+        const selectedProbabilities = diagnosticSteps.map(step => ({
+          step,
+          topFive: Array.from({length: 512}, (_, i) => i)
+            .sort((a, b) => probabilities[step][b] - probabilities[step][a])
+            .slice(0, 5)
+            .map(i => [i, probabilities[step][i]]),
+        }));
+        // Default pitch classes from Magenta.js music/src/core/constants.ts.
+        const pitchBits = new Map([36, 38, 42, 46, 45, 48, 50, 49, 51]
+          .map((pitch, bit) => [pitch, bit]));
+        const sampledClassIds = Array.from({length: 16}, () => 0);
+        for (const [step, pitch] of notes) {
+          const bit = pitchBits.get(pitch);
+          if (!Number.isInteger(step) || step < 0 || step >= 16 || bit === undefined) {
+            throw new Error("Unexpected drum event in generated NoteSequence");
+          }
+          sampledClassIds[step] |= (1 << bit);
+        }
+        const firstTopFive = selectedProbabilities[0].topFive;
+        const classGrid = sampledClassIds.map(value => value === 0 ? "." : "X").join("");
+        const emptyPattern = sampledClassIds.every(value => value === 0);
+
+        savedResult = {
+          experiment: "Y2Synth Magenta.js DrumsRNN reference",
+          implementation: "@magenta/music@1.23.1",
+          checkpoint: "drum_kit_rnn_tfjs",
+          sampling: samplingId,
+          tfjsBackend: (window.mm.tf && window.mm.tf.getBackend && window.mm.tf.getBackend()) || "unknown",
+          measuredOn: navigator.userAgent,
+          timestamp: new Date().toISOString(),
+          loadMs: Number(loadMs.toFixed(2)),
+          generationMs: Number(generationMs.toFixed(2)),
+          generationMode: primerId,
+          noUserInput: isFromScratch,
+          primerId,
+          internalSeedOrDiagnosticPrimer: selectedPrimer,
+          continuation: sequence,
+          continuationMatchesPrimer: repeatsPrimer,
+          meanTopProbability,
+          firstTopFive,
+          selectedProbabilities,
+          sampledClassIds,
+          probabilities,
+        };
+        status.textContent = emptyPattern
+          ? (samplingId === "argmax"
+             ? "Argmax completed: 16 silent steps. This is a valid deterministic model output, not a generation failure. Compare the class IDs and probabilities below."
+             : "Generation completed with 0 hits (silent output). Try sampling again or raise temperature.")
+          : "Reference generation succeeded. JSON export is optional.";
+        result.textContent = [
+          "Model initialization: " + loadMs.toFixed(1) + " ms",
+          "Generation (16 steps): " + generationMs.toFixed(1) + " ms",
+          "Generation mode: " + (isFromScratch ? "FROM SCRATCH (1 silent bootstrap step)" : primerId + " diagnostic primer"),
+          "Input MIDI hits: " + inputHits.length,
+          "Sampling: " + samplingId,
+          "Generated hits: " + notes.length,
+          emptyPattern
+            ? "SILENCE: all 16 steps are rests. Generation completed; nothing can be played."
+            : "Generated non-empty pattern; preview playback is available.",
+          "16-step activity grid (. = silence, X = at least one hit):",
+          classGrid,
+          "Output equals input: " + (isFromScratch ? "not applicable (no user input)" : (repeatsPrimer ? "YES" : "NO")),
+          "Mean maximum class probability: " + meanTopProbability.toFixed(4),
+          "Sampled class IDs (16 steps):",
+          JSON.stringify(sampledClassIds),
+          "Top 5 class probabilities at steps 0, 1, 7, 15:",
+          ...selectedProbabilities.map(({step, topFive}) =>
+            "Step " + step + ": " + JSON.stringify(
+              topFive.map(([id, p]) => [id, Number(p.toFixed(6))])
+            )
+          ),
+          "Hits [step, MIDI pitch]:",
+          JSON.stringify(notes, null, 2),
+          "Probability matrix: 16 × 512; saved in JSON only.",
+        ].join("\n");
+        saveButton.disabled = false;
+        latestSequence = sequence;
+        playButton.disabled = !sequence.notes || sequence.notes.length === 0;
+      } catch (error) {
+        status.textContent = "Experiment failed. See details below.";
+        result.textContent = String(error && error.stack || error);
+        console.error(error);
+      } finally {
+        if (model) model.dispose();
+        runButton.disabled = false;
+        primerSelect.disabled = false;
+        samplingSelect.disabled = false;
+      }
+    });
+
+    // Audible preview uses only native Web Audio and does not depend on sample downloads.
+    // Deliberately approximate drum voices; only event timing and pitch class are tested.
+    function tone(ctx, at, hz, toHz, dur, type, level) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(hz, at);
+      osc.frequency.exponentialRampToValueAtTime(Math.max(20, toHz), at + dur);
+      gain.gain.setValueAtTime(level, at);
+      gain.gain.exponentialRampToValueAtTime(0.001, at + dur);
+      osc.connect(gain);
+      gain.connect(masterGain);
+      osc.start(at);
+      osc.stop(at + dur + 0.01);
+    }
+
+    function noise(ctx, at, dur, hpHz, level) {
+      const source = ctx.createBufferSource();
+      source.buffer = noiseBuffer;
+      const hp = ctx.createBiquadFilter();
+      hp.type = "highpass";
+      hp.frequency.value = hpHz;
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(level, at);
+      gain.gain.exponentialRampToValueAtTime(0.001, at + dur);
+      source.connect(hp);
+      hp.connect(gain);
+      gain.connect(masterGain);
+      source.start(at);
+      source.stop(at + dur);
+    }
+
+    function drum(ctx, at, pitch) {
+      if ([35,36].includes(pitch)) {
+        tone(ctx, at, 145, 48, 0.22, "sine", 0.7);
+      } else if ([38,40].includes(pitch)) {
+        noise(ctx, at, 0.17, 1000, 0.36);
+        tone(ctx, at, 175, 130, 0.09, "triangle", 0.16);
+      } else if ([42,44,46].includes(pitch)) {
+        noise(ctx, at, pitch === 46 ? 0.30 : 0.075, 6000, 0.19);
+      } else if ([49,51,52,53,55,57,59].includes(pitch)) {
+        noise(ctx, at, 0.46, 3800, 0.23);
+      } else if ([41,43,45,47,48,50].includes(pitch)) {
+        const freq = 110 + (pitch - 41) * 10;
+        tone(ctx, at, freq * 1.3, freq * 0.75, 0.18, "sine", 0.34);
+      } else {
+        noise(ctx, at, 0.12, 1500, 0.16);
+      }
+    }
+
+    playButton.addEventListener("click", async () => {
+      if (!latestSequence) return;
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) {
+        status.textContent = "Web Audio is unavailable in this browser.";
+        return;
+      }
+      try {
+        if (!audioContext) {
+          audioContext = new AudioContextClass();
+          masterGain = audioContext.createGain();
+          masterGain.gain.value = 0.22;
+          masterGain.connect(audioContext.destination);
+          const count = Math.ceil(audioContext.sampleRate);
+          noiseBuffer = audioContext.createBuffer(1, count, audioContext.sampleRate);
+          const samples = noiseBuffer.getChannelData(0);
+          for (let i = 0; i < count; i++) samples[i] = Math.random() * 2 - 1;
+        }
+        await audioContext.resume();
+        const now = audioContext.currentTime;
+        if (now < playingUntil) return;
+        const qpm = (latestSequence.tempos && latestSequence.tempos[0] &&
+          latestSequence.tempos[0].qpm) || 120;
+        const quarterSteps = (latestSequence.quantizationInfo &&
+          latestSequence.quantizationInfo.stepsPerQuarter) || 4;
+        const stepSec = 60 / qpm / quarterSteps;
+        const startAt = now + 0.08;
+        const notes = latestSequence.notes || [];
+        for (const note of notes) {
+          drum(audioContext, startAt + note.quantizedStartStep * stepSec, note.pitch);
+        }
+        playingUntil = startAt + 16 * stepSec + 0.5;
+        status.textContent = "Playing generated pattern with basic Web Audio drums (" + qpm + " BPM).";
+      } catch (error) {
+        status.textContent = "Preview failed; see error below.";
+        result.textContent = String(error && error.stack || error);
+      }
+    });
+
+    status.textContent = "Ready — JavaScript initialized. Click Generate pattern.";
+    result.textContent = "UI ready; choose From scratch and a sampling mode.";
+    saveButton.addEventListener("click", () => {
+      if (!savedResult) return;
+      const blob = new Blob([JSON.stringify(savedResult, null, 2)], {type: "application/json"});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "drumsrnn-reference.json";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
+  </script>
+</body>
+</html>
