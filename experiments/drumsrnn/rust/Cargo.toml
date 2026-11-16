@@ -10,6 +10,7 @@ description = "Experimental offline Rust Magenta DrumsRNN inference, WAV and liv
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 cpal = { version = "=0.18.2", optional = true }
+triple_buffer = { version = "=9.0.0", optional = true }
 
 [features]
 default = []
