@@ -314,3 +314,26 @@ cargo run --release --manifest-path experiments/drumsrnn/rust/Cargo.toml
 ```
 
 **Следующий рубеж:** реализовать точную структуру `AttentionCellWrapper`, контекстные входы, шаги рекуррентного состояния 3 слоёв, output projection и сопоставить распределения классов с Magenta.js. Без этого Rust-движок **не генерирует** барабанные паттерны и не является готовым inference.
+
+## Эксперимент 10 — шаг полной attention-сети на Rust (2026-11-17)
+
+**Подтверждённый предыдущий результат на Mac:** 10 Rust tests passed, release loader успешно обработал 16 тензоров/2,967,850 параметров, три pretrained LSTM слоя завершили пробный шаг на нулевых входах без NaN/Inf. Пользователь прислал полный лог этих проверок.
+
+**Добавлено в ветку, но ещё не проверено сборкой/сравнением:**
+- Новый `experiments/drumsrnn/rust/src/attention.rs`: скалярная реализация одного шага в точном порядке из Magenta.js (ввод класса + 6-битный счётчик `-1/+1`, input projection, 3 LSTM, query из `c0,h0,c1,h1,c2,h2`, 32-slot attention, выходной projection и 512 logits).
+- Специально не добавляется `attention/bias` к query: он есть в weights, но в оригинальном [attention.ts](https://github.com/magenta/magenta-js/blob/master/music/src/music_rnn/attention.ts) `attnY = tf.matMul(attnQuery, this.attnMatrix)` без bias. Это может быть важно для численной эквивалентности.
+- В CLI после загрузки реальных весов исполняется **один** шаг с внутренней тишиной (класс `0`, step `0`), после чего выводятся топ-5 распределения вероятностей. Это **ещё не полный генератор**, и полученные значения должны быть сверены с Magenta.js.
+- В `reference.html` добавлен вывод топ-5 классов **первого сгенерированного шага**; это позволяет сравнить с Rust **без сохранения JSON**, чего пользователь не хочет. Для сравнения выбрать From scratch, Temperature 1.0.
+- Добавлены синтетические тесты внимания, бинарного счётчика и softmax; их прохождение пока не подтверждено.
+
+**Следующий шаг на Mac:**
+
+```bash
+git pull --ff-only
+cargo test --manifest-path experiments/drumsrnn/rust/Cargo.toml
+cargo run --release --manifest-path experiments/drumsrnn/rust/Cargo.toml
+```
+
+Затем в открытой странице `reference.html` обновить страницу, выбрать `From scratch` и `Temperature 1.0`, нажать `Generate pattern`, скопировать только 5 пар `[class, probability]` первого шага и сравнить с Rust CLI. Не требуется сохранять MIDI/JSON. При расхождении сначала анализировать LSTM bias/matmul, порядок строк и self-attention state. Совпадение топ-5 **само по себе не доказывает** полной численной корректности, но полезно для первичной диагностики.
+
+Source of model sequence and binary counter: [music_rnn/model.ts](https://github.com/magenta/magenta-js/blob/master/music/src/music_rnn/model.ts), [attention.ts](https://github.com/magenta/magenta-js/blob/master/music/src/music_rnn/attention.ts), [aux_inputs.ts](https://github.com/magenta/magenta-js/blob/master/music/src/core/aux_inputs.ts).
