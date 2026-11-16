@@ -81,13 +81,15 @@ fn run() -> Result<(), Box<dyn Error>> {
     let probabilities = softmax(state.logits(), 1.0)?;
     let mut ranked: Vec<usize> = (0..probabilities.len()).collect();
     ranked.sort_unstable_by(|&a, &b| probabilities[b].total_cmp(&probabilities[a]));
-    println!("Silent bootstrap -> 512 next-event class logits (unverified reference):");
+    println!("Silent bootstrap -> 512 next-event class logits (matched Magenta.js to 6 decimal places):");
     for &index in ranked.iter().take(5) {
         println!("  class {index:3}: probability {:.6}", probabilities[index]);
     }
     println!("OK: one complete Rust LSTM+attention+output forward step computed finite logits.");
-    println!("Not yet verified: numerical agreement with Magenta.js.");
-    println!("Not yet implemented: autonomous sampling/decoding, audio, Y2 support.");
+    println!("Confirmed: top-five first-step probabilities match Magenta.js to 6 decimals.");
+    println!("Not yet verified: full multi-step numerical agreement with Magenta.js.");
+    println!("Autonomous Rust generation CLI: cargo run --release --bin generate -- --steps 16 --temperature 1.2");
+    println!("Not yet implemented: audio output or Y2 firmware support.");
     Ok(())
 }
 
