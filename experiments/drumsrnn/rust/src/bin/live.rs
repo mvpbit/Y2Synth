@@ -20,9 +20,10 @@ use cpal::{FromSample, Sample, SampleFormat, SizedSample, Stream, StreamConfig};
 use y2synth_drumsrnn_weights::{
     attention::AttentionRnn,
     generation::{generate, GeneratedPattern, Sampling, DRUM_PITCHES},
+    kit::{pitch_by_name, DrumKit, VOICE_NAMES},
     load_checkpoint,
     realtime::RealtimePlayer,
-    sequencer::{prepare_loop, PreparedLoop},
+    sequencer::{prepare_loop_with_kit, PreparedLoop},
 };
 
 struct Options {
@@ -41,7 +42,11 @@ fn usage() {
     println!("  --weights PATH     Local downloaded Magenta checkpoint directory");
     println!("  -h, --help         Show help");
     println!();
-    println!("While running: play | stop | bpm <number> | regenerate | status | quit");
+    println!("While running:");
+    println!("  play | stop | bpm <40..240> | regenerate | status | quit");
+    println!("  kit | level <voice> <0..1.5> | tone <voice> <0..1>");
+    println!("  decay <voice> <0.5..2> | reset-kit");
+    println!("Voices: kick snare chh ohh lowtom midtom hightom crash ride");
 }
 
 fn parse_options() -> Result<Option<Options>, Box<dyn Error>> {
@@ -129,10 +134,11 @@ fn next_pattern(
     temperature: f32,
     bpm: f32,
     sample_rate: u32,
+    kit: &DrumKit,
 ) -> Result<(GeneratedPattern, PreparedLoop), Box<dyn Error>> {
     // Always start from scratch: no user-supplied MIDI primer.
     let pattern = generate(network, 16, Sampling::Temperature(temperature), seed)?;
-    let buffer = prepare_loop(&pattern, bpm, sample_rate)?;
+    let buffer = prepare_loop_with_kit(&pattern, bpm, sample_rate, kit)?;
     Ok((pattern, buffer))
 }
 
@@ -146,6 +152,16 @@ fn show_pattern(pattern: &GeneratedPattern, seed: u64) {
     }
     if pattern.hits.is_empty() {
         println!("  This random pattern is silent. Use 'regenerate' to try a new one.");
+    }
+}
+
+fn show_kit(kit: &DrumKit) {
+    println!("Current drum kit (level / tone / decay):");
+    for (name, params) in VOICE_NAMES.iter().zip(kit.voices().iter()) {
+        println!(
+            "  {name:<8} {:>4.2} / {:>4.2} / {:>4.2}",
+            params.level, params.tone, params.decay
+        );
     }
 }
 
@@ -171,8 +187,9 @@ fn run() -> Result<(), Box<dyn Error>> {
     let network = AttentionRnn::from_checkpoint(&checkpoint)?;
     let mut bpm = options.bpm;
     let mut seed = options.seed;
+    let mut kit = DrumKit::default();
     let mut current_pattern = next_pattern(
-        &network, seed, options.temperature, bpm, sample_rate,
+        &network, seed, options.temperature, bpm, sample_rate, &kit,
     )?;
     show_pattern(&current_pattern.0, seed);
 
@@ -200,7 +217,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     stream.play()?;
 
     println!();
-    println!("Ready. Enter: play | stop | bpm <40..240> | regenerate | status | quit");
+    println!("Ready. Enter: play | stop | bpm <40..240> | regenerate | kit | help | quit");
     println!("AI inference and synth rendering run on this control thread, not the audio callback.");
     let stdin = io::stdin();
     let mut lines = stdin.lock();
@@ -225,7 +242,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             ["regenerate"] => {
                 seed = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
                 let (pattern, buffer) =
-                    next_pattern(&network, seed, options.temperature, bpm, sample_rate)?;
+                    next_pattern(&network, seed, options.temperature, bpm, sample_rate, &kit)?;
                 input.write(buffer);
                 println!("New AI-generated pattern published for next bar (or immediately if stopped).");
                 show_pattern(&pattern, seed);
@@ -236,12 +253,43 @@ fn run() -> Result<(), Box<dyn Error>> {
                     validate_bpm(value).ok().map(|_| value)
                 }) {
                     Some(next_bpm) => {
-                        let buffer = prepare_loop(&current_pattern.0, next_bpm, sample_rate)?;
+                        let buffer = prepare_loop_with_kit(
+                            &current_pattern.0, next_bpm, sample_rate, &kit
+                        )?;
                         input.write(buffer);
                         bpm = next_bpm;
                         println!("Tempo {bpm} BPM queued for next bar (or immediately if stopped).");
                     }
                     None => println!("Invalid BPM. Enter a number from 40 to 240."),
+                }
+            }
+            ["kit"] => show_kit(&kit),
+            ["reset-kit"] => {
+                kit.reset();
+                let buffer = prepare_loop_with_kit(
+                    &current_pattern.0, bpm, sample_rate, &kit
+                )?;
+                input.write(buffer);
+                println!("Kit restored to defaults; update scheduled at the next bar.");
+            }
+            ["level", name, raw] | ["tone", name, raw] | ["decay", name, raw] => {
+                let parameter = words[0];
+                match (pitch_by_name(name), raw.parse::<f32>()) {
+                    (Some(pitch), Ok(value)) => {
+                        match kit.set(pitch, parameter, value) {
+                            Ok(()) => {
+                                let buffer = prepare_loop_with_kit(
+                                    &current_pattern.0, bpm, sample_rate, &kit,
+                                )?;
+                                input.write(buffer);
+                                println!(
+                                    "{parameter} {name} = {value:.2} (next bar or immediately while stopped)"
+                                );
+                            }
+                            Err(error) => println!("Invalid {parameter}: {error}"),
+                        }
+                    }
+                    _ => println!("Invalid voice or value; enter 'help' for syntax."),
                 }
             }
             ["status"] => println!(
@@ -250,7 +298,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             ),
             ["quit"] | ["exit"] => break,
             ["help"] => usage(),
-            _ => println!("Unknown command. Try: play | stop | bpm 140 | regenerate | status | quit"),
+            _ => println!("Unknown command. Try 'help' for available drum controls."),
         }
     }
     // Stream shutdown happens on the CLI thread. No WAV file is created.
