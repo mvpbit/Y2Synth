@@ -41,6 +41,7 @@
 | `audio.rs` | Тестовый синтез ударных, PCM16 WAV; рендер при заданном sample rate | WAV прослушан на Mac, последующие изменения требуют регрессии |
 | `sequencer.rs` | Подготовка зацикленного такта, транспорт, смена буфера на границе такта | Экспортирован из `lib.rs`, **тесты ещё не запускались на Mac** |
 | `bin/generate.rs` | CLI автономной генерации и необязательной записи WAV | Использован на Mac |
+| `bin/live.rs` | CPAL/CoreAudio интерактивный CLI: play/stop/BPM/regenerate | В `main`, ещё не проверен сборкой и прослушиванием |
 
 `Cargo.toml` содержит `serde`, `serde_json` и **опциональный CPAL 0.18.2** (`--features live-audio`). В `src/bin/live.rs` есть CLI и CPAL output callback; **не компилировалось на Mac**. При следующем Cargo build нужно обновить `Cargo.lock`.
 
