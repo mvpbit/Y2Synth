@@ -112,7 +112,11 @@ def describe(root: Path) -> None:
                 raise ValueError(f"Missing shard: {shard}")
             data_size = shard.stat().st_size
             actual_bytes += data_size
-            digest = hashlib.file_digest(shard.open("rb"), "sha256").hexdigest()
+            hash_state = hashlib.sha256()
+            with shard.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    hash_state.update(chunk)
+            digest = hash_state.hexdigest()
             print(f"  shard {filename}: {data_size:,} bytes, SHA-256 {digest}")
         print(f"  group bytes: expected={expected_bytes:,}, actual={actual_bytes:,}")
         if expected_bytes != actual_bytes:
