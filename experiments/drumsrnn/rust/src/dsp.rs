@@ -6,7 +6,7 @@
 
 use crate::generation::DrumHit;
 use crate::kit::VoiceParams;
-use std::f32::consts::{PI, TAU};
+use std::f32::consts::TAU;
 
 pub fn voice_duration(pitch: u8, settings: VoiceParams) -> f32 {
     let base = match pitch {
