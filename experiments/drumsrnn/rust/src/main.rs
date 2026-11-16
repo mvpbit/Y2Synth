@@ -11,7 +11,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         .expect("crate directory is inside experiments/drumsrnn")
         .join("models/drum_kit_rnn_tfjs");
     let dir = match args.next() {
-        Some(arg) if arg == "--help" || arg == "-h" => {
+        Some(arg) if arg.to_str() == Some("--help") || arg.to_str() == Some("-h") => {
             println!("Usage: y2synth-drumsrnn-weights [CHECKPOINT_DIR]");
             println!("Reads offline Magenta.js weights. Does not generate music yet.");
             return Ok(());
