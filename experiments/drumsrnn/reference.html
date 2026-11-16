@@ -34,6 +34,16 @@
   <p id="status" role="status">Ready.</p>
   <pre id="result">No result yet.</pre>
   <script>
+    // Separate small script so parse errors in the main script become visible in-page.
+    window.addEventListener("error", function (event) {
+      const statusNode = document.getElementById("status");
+      const outputNode = document.getElementById("result");
+      if (statusNode) statusNode.textContent = "JavaScript error: " + event.message;
+      if (outputNode) outputNode.textContent =
+        (event.filename || "inline script") + ":" + event.lineno + ":" + event.colno;
+    });
+  </script>
+  <script>
     "use strict";
     const runButton = document.getElementById("run");
     const saveButton = document.getElementById("save");
@@ -210,7 +220,7 @@
           "Top 5 class probabilities at steps 0, 1, 7, 15:",
           ...selectedProbabilities.map(({step, topFive}) =>
             "Step " + step + ": " + JSON.stringify(
-              topFive.map(([id, p]) => [id, Number(p.toFixed(6))]))
+              topFive.map(([id, p]) => [id, Number(p.toFixed(6))])
             )
           ),
           "Hits [step, MIDI pitch]:",
@@ -321,6 +331,8 @@
       }
     });
 
+    status.textContent = "Ready — JavaScript initialized. Click Generate pattern.";
+    result.textContent = "UI ready; choose From scratch and a sampling mode.";
     saveButton.addEventListener("click", () => {
       if (!savedResult) return;
       const blob = new Blob([JSON.stringify(savedResult, null, 2)], {type: "application/json"});
