@@ -127,7 +127,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                  "High tom", "Crash", "Ride"];
     for (bit, &pitch) in DRUM_PITCHES.iter().enumerate() {
         let row: String = pattern.classes.iter()
-            .map(|class| if (class & (1usize << bit)) != 0 { 'X' } else { '.' })
+            .map(|class| if (*class & (1usize << bit)) != 0 { 'X' } else { '.' })
             .collect();
         println!("  {:<10} MIDI {:>2}: {}", names[bit], pitch, row);
     }
