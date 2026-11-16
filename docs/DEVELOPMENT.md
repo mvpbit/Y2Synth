@@ -150,5 +150,50 @@ cargo test --locked --manifest-path experiments/drumsrnn/rust/Cargo.toml
 cargo test --locked --manifest-path experiments/drumsrnn/rust/Cargo.toml --features live-audio
 ```
 
-После этого можно проектировать coordinator, который маршрутизирует `GenerateTrack(Drums)` в существующий DrumsRNN, а для `GenerateTrack(Synth1/Synth2)` и `GenerateAll` пока возвращает явный статус «ещё не реализовано», **не меняя текущего проекта**.
+## Application Controller и подключение консольного меню (2026-11-17)
+
+Заложен реальный **Application Controller** — `src/application.rs`. В `src/project.rs` добавлен общий `bpm` со валидацией и сохранением в RAM-снимке. `src/bin/live.rs` подключён к нему через абстракции `DrumGenerator` (closure с настоящей DrumsRNN) и `AudioPort` (готовый PCM в triple buffer + атомарный старт). Audio callback и зависимости Cargo **не изменены**.
+
+Фактически реализовано:
+- AI → Generate Track → Drums генерирует новый паттерн, готовит PCM вне RT, публикует на границе такта, после успешного вывода сохраняет его в RAM.
+- PLAY использует `last_saved`: без генерации восстанавливает паттерн, настройки `DrumKit`, BPM и режим, передаёт PCM и запускает аудио.
+- Изменения `bpm/level/tone/decay/reset-kit` теперь проходят через coordinator и сохраняются; старые команды `play` и `regenerate` также маршрутизированы через него.
+- CLI симулирует колесо: `menu`, `center`, `next`, `prev`, `back`, `wheel-play`.
+- `GenerateAll` и генерация Synth1/Synth2 возвращают `NotImplemented` и **не меняют проект**. `EditUserTrack(Drums)` направляет к командам управления китом; полноценного UI редактора нет.
+- Добавлены unit-тесты на отсутствие повторного инференса при PLAY, целостность проекта при ошибке, сохранение BPM/кита, отсутствие фальшивых Synth и сквозной путь `MenuController → ApplicationController`.
+- В начале `live` готовится и автоматически сохраняется один сгенерированный AI-паттерн, но playback начинается только по PLAY; при завершении процесса снимок **теряется**. Никакой файловой сериализации пока нет.
+
+**Проверка на Mac ещё необходима** (новый код не запускался в окружении ассистента):
+
+```bash
+git pull --ff-only
+cargo test --locked --manifest-path experiments/drumsrnn/rust/Cargo.toml --features live-audio
+cargo run --release --locked --manifest-path experiments/drumsrnn/rust/Cargo.toml --features live-audio --bin live -- --bpm 120 --temperature 1.2
+```
+
+Интерактивный сценарий:
+```text
+menu
+center
+next
+center
+next
+center
+next
+next
+center
+back
+back
+back
+wheel-play
+bpm 90
+tone snare 0.8
+stop
+play
+quit
+```
+
+**Что дальше:** собрать и прослушать на Mac, проверить, что `wheel-play` не регенерирует новый pattern, затем реализовать долговременное хранение музыкального проекта и позднее добавить реальные synth-generators. Не объявлять этот этап проверенным до фактического прогона.
+
+
 
