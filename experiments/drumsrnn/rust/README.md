@@ -27,7 +27,7 @@ Expected for the checkpoint already inspected on Mac:
 - 11,871,400 decoded weight bytes (11.32 MiB)
 - attention length 32
 
-**Still not implemented:** production drum DSP, real-time audio output, controlled runtime benchmarks, cross-compilation, or running on Innioasis Y2. The WAV renderer is a simple preview, not the final instrument. Loading and decoding all weights uses RAM; embedded suitability has not been established.
+**Still not verified:** new CPAL live output, strict real-time safety, controlled runtime benchmarks, cross-compilation, or running on Innioasis Y2. Production drum DSP is not implemented. The WAV renderer is a simple preview, not the final instrument. Loading and decoding all weights uses RAM; embedded suitability has not been established.
 
 The checkpoint-loader tests and LSTM tests use synthetic small matrices; do not mistake a passing unit test for proof of full neural network equivalence. `cargo run --release` loads the real checkpoint and runs **one step per pretrained LSTM layer with a synthetic zero input vector**, which validates finite computations and compatible dimensions, **not a real generated drum event**. Next we need to build the attention wrapper and compare full inference against Magenta.js.
 
