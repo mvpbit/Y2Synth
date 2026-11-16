@@ -73,3 +73,49 @@ cargo run --release --manifest-path experiments/drumsrnn/rust/Cargo.toml
 **Not yet verified on Mac:** compilation/tests of the newly added attention
 module and output comparison with Magenta.js. Earlier 10 Rust tests and the
 pretrained LSTM zero-input smoke checks passed.
+
+## Autonomous generation CLI (experimental)
+
+The new `src/generation.rs` and `src/bin/generate.rs` provide a standalone
+**from-scratch** 16-step drum generator using the same Magenta checkpoint;
+no user-written groove or browser is needed.
+
+```bash
+# In the root of the Y2Synth repository
+cargo test --manifest-path experiments/drumsrnn/rust/Cargo.toml
+cargo run --release --manifest-path experiments/drumsrnn/rust/Cargo.toml \
+  --bin generate -- --steps 16 --temperature 1.2
+
+# Deterministic option for comparison with browser's "Argmax":
+cargo run --release --manifest-path experiments/drumsrnn/rust/Cargo.toml \
+  --bin generate -- --steps 16 --argmax
+
+# Repeat identical pseudorandom sampling within Rust:
+cargo run --release --manifest-path experiments/drumsrnn/rust/Cargo.toml \
+  --bin generate -- --steps 16 --temperature 1.2 --seed 1234
+```
+
+The CLI prints sample time, an ASCII drum-grid, MIDI pitches/steps and
+diagnostic top-five next-class probabilities at steps **0, 1, 7, 15**.
+Pitch classes match the upstream Magenta default nine drum families:
+`[36,38,42,46,45,48,50,49,51]`; class `0` means silence.
+
+The internal **one silent-step seed** is fed to the model once. It is not
+part of the output and is not a musician-provided pattern. The generated
+class from each step is fed back for the following recurrent step.
+`--temperature` samples a categorical distribution, `--argmax` chooses
+the most probable class, and `--seed` provides repeatability for Rust.
+The Rust sampling RNG is **not identical** to TensorFlow.js's RNG, so
+temperature sampling is not expected to match the browser event-for-event.
+
+**Validation status:** Rust loader/LSTM/first attention-step passed all 14
+existing tests and matched the first-step Magenta.js top five probabilities
+to six decimals. **New generation module and CLI have not yet been compiled,
+run, or compared with the browser on Mac.** Do not interpret a successful
+build as proof of multi-step numerical equivalence. Compare browser
+`reference.html` in *From scratch / Argmax* mode: it now prints
+sampled class IDs and top five probabilities at steps 0, 1, 7, and 15.
+No JSON file is needed.
+
+Audio rendering, model speed on 32-bit ARM, full model equality and
+Y2 firmware integration remain out of scope.
