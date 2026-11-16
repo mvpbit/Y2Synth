@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Y2Synth — DrumsRNN reference inference</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, -apple-system, sans-serif; }
+    body { max-width: 760px; margin: 40px auto; padding: 0 18px; line-height: 1.5; }
+    h1 { margin-bottom: .15rem; }
+    .secondary { color: #a6a6a6; }
+    button { font: inherit; padding: .65rem 1rem; margin: .6rem .5rem .6rem 0; }
+    button:disabled { opacity: .5; }
+    pre { background: #191919; border: 1px solid #555; border-radius: 8px; padding: 1rem; overflow: auto; max-height: 420px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    code { font-size: .95em; }
+  </style>
+  <!-- Pinned upstream Magenta.js library. Network is needed only for this JS bundle. -->
+  <script src="https://cdn.jsdelivr.net/npm/@magenta/music@1.23.1"></script>
+</head>
+<body>
+  <h1>Y2Synth · DrumsRNN</h1>
+  <p class="secondary">Reference inference on Mac, not Rust or Y2. Loads weights from this local HTTP server.</p>
+  <p>Checkpoint: <code>models/drum_kit_rnn_tfjs/</code></p>
+  <p>Primer: 16 steps (kick + snare + hi-hat). Continuation: 16 steps.
+    Sampling: argmax (no temperature), for a reproducible reference.</p>
+  <button id="run">Generate reference</button>
+  <button id="save" disabled>Save JSON</button>
+  <p id="status" role="status">Ready.</p>
+  <pre id="result">No result yet.</pre>
+  <script>
+    "use strict";
+    const runButton = document.getElementById("run");
+    const saveButton = document.getElementById("save");
+    const status = document.getElementById("status");
+    const result = document.getElementById("result");
+    const checkpoint = new URL("./models/drum_kit_rnn_tfjs", window.location.href).href.replace(/\/$/, "");
+    let savedResult = null;
+
+    const primer = {
+      notes: [
+        {pitch: 36, quantizedStartStep: 0, quantizedEndStep: 1, isDrum: true, velocity: 100},
+        {pitch: 42, quantizedStartStep: 0, quantizedEndStep: 1, isDrum: true, velocity: 100},
+        {pitch: 42, quantizedStartStep: 2, quantizedEndStep: 3, isDrum: true, velocity: 100},
+        {pitch: 38, quantizedStartStep: 4, quantizedEndStep: 5, isDrum: true, velocity: 100},
+        {pitch: 42, quantizedStartStep: 4, quantizedEndStep: 5, isDrum: true, velocity: 100},
+        {pitch: 42, quantizedStartStep: 6, quantizedEndStep: 7, isDrum: true, velocity: 100},
+        {pitch: 36, quantizedStartStep: 8, quantizedEndStep: 9, isDrum: true, velocity: 100},
+        {pitch: 42, quantizedStartStep: 8, quantizedEndStep: 9, isDrum: true, velocity: 100},
+        {pitch: 42, quantizedStartStep: 10, quantizedEndStep: 11, isDrum: true, velocity: 100},
+        {pitch: 38, quantizedStartStep: 12, quantizedEndStep: 13, isDrum: true, velocity: 100},
+        {pitch: 42, quantizedStartStep: 12, quantizedEndStep: 13, isDrum: true, velocity: 100},
+        {pitch: 42, quantizedStartStep: 14, quantizedEndStep: 15, isDrum: true, velocity: 100},
+      ],
+      quantizationInfo: {stepsPerQuarter: 4},
+      tempos: [{time: 0, qpm: 120}],
+      timeSignatures: [{time: 0, numerator: 4, denominator: 4}],
+      totalQuantizedSteps: 16,
+    };
+
+    runButton.addEventListener("click", async () => {
+      runButton.disabled = true;
+      saveButton.disabled = true;
+      savedResult = null;
+      result.textContent = "Loading...";
+      let model;
+      try {
+        if (!window.mm || typeof window.mm.MusicRNN !== "function") {
+          throw new Error("Magenta.js did not load; check browser network/CDN.");
+        }
+        status.textContent = "Loading local checkpoint...";
+        model = new window.mm.MusicRNN(checkpoint);
+        const loadStart = performance.now();
+        await model.initialize();
+        const loadMs = performance.now() - loadStart;
+
+        status.textContent = "Generating 16 steps with argmax...";
+        const genStart = performance.now();
+        const response = await model.continueSequenceAndReturnProbabilities(primer, 16);
+        const sequence = await response.sequence;
+        const generationMs = performance.now() - genStart;
+        const probabilities = response.probs.map(row => Array.from(row));
+        if (probabilities.length !== 16 || probabilities.some(row => row.length !== 512)) {
+          throw new Error("Unexpected probability matrix shape");
+        }
+
+        savedResult = {
+          experiment: "Y2Synth Magenta.js DrumsRNN reference",
+          implementation: "@magenta/music@1.23.1",
+          checkpoint: "drum_kit_rnn_tfjs",
+          sampling: "argmax; no temperature",
+          measuredOn: navigator.userAgent,
+          timestamp: new Date().toISOString(),
+          loadMs: Number(loadMs.toFixed(2)),
+          generationMs: Number(generationMs.toFixed(2)),
+          primer,
+          continuation: sequence,
+          probabilities,
+        };
+        const notes = (sequence.notes || []).map(n =>
+          [n.quantizedStartStep, n.pitch]).sort((a, b) => a[0] - b[0]);
+        status.textContent = "Reference generation succeeded. Save JSON for comparisons.";
+        result.textContent = [
+          "Model initialization: " + loadMs.toFixed(1) + " ms",
+          "Generation (16 steps): " + generationMs.toFixed(1) + " ms",
+          "Generated hits: " + notes.length,
+          "Hits [step, MIDI pitch]:",
+          JSON.stringify(notes, null, 2),
+          "Probability matrix: 16 × 512; saved in JSON only.",
+        ].join("\n");
+        saveButton.disabled = false;
+      } catch (error) {
+        status.textContent = "Experiment failed. See details below.";
+        result.textContent = String(error && error.stack || error);
+        console.error(error);
+      } finally {
+        if (model) model.dispose();
+        runButton.disabled = false;
+      }
+    });
+
+    saveButton.addEventListener("click", () => {
+      if (!savedResult) return;
+      const blob = new Blob([JSON.stringify(savedResult, null, 2)], {type: "application/json"});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "drumsrnn-reference.json";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
+  </script>
+</body>
+</html>
