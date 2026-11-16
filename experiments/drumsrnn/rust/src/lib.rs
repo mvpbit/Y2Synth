@@ -1,5 +1,7 @@
 //! Read TensorFlow.js Magenta MusicRNN weight shards as little-endian f32.
-//! This module does not implement LSTM, attention, or music generation.
+//! The crate now includes a standalone BasicLSTMCell step, but not attention or music generation.
+
+pub mod lstm;
 
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashSet};
