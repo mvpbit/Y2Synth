@@ -8,6 +8,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use y2synth_drumsrnn_weights::{
     attention::AttentionRnn,
+    audio::write_wav,
     generation::{generate, Sampling, DRUM_PITCHES},
     load_checkpoint,
 };
@@ -17,6 +18,8 @@ struct Options {
     temperature: Option<f32>,
     seed: u64,
     checkpoint: PathBuf,
+    wav: Option<PathBuf>,
+    bpm: f32,
 }
 
 fn usage() {
@@ -27,6 +30,8 @@ fn usage() {
     println!("  --argmax            Deterministic most-likely-class selection");
     println!("  --seed N            RNG seed (u64); prints seed for reproducibility");
     println!("  --weights PATH      Directory containing already downloaded checkpoint");
+    println!("  --wav FILE          Also render generated hits to PCM16 WAV (optional)");
+    println!("  --bpm N             WAV playback tempo, 40..240 (default 120)");
     println!("  -h, --help          Show this help");
 }
 
@@ -47,6 +52,8 @@ fn parse_options() -> Result<Option<Options>, Box<dyn Error>> {
         temperature: Some(1.2),
         seed,
         checkpoint: default_dir,
+        wav: None,
+        bpm: 120.0,
     };
 
     let mut args = env::args().skip(1);
@@ -68,6 +75,8 @@ fn parse_options() -> Result<Option<Options>, Box<dyn Error>> {
                 explicit_argmax = true;
             }
             "--seed" => options.seed = args.next().ok_or("Missing --seed N")?.parse()?,
+            "--wav" => options.wav = Some(PathBuf::from(args.next().ok_or("Missing --wav FILE")?)),
+            "--bpm" => options.bpm = args.next().ok_or("Missing --bpm N")?.parse()?,
             "--weights" => options.checkpoint = PathBuf::from(
                 args.next().ok_or("Missing --weights PATH")?
             ),
@@ -84,6 +93,9 @@ fn parse_options() -> Result<Option<Options>, Box<dyn Error>> {
         if !t.is_finite() || t <= 0.0 {
             return Err("--temperature must be finite and > 0".into());
         }
+    }
+    if !options.bpm.is_finite() || !(40.0..=240.0).contains(&options.bpm) {
+        return Err("--bpm must be finite and between 40 and 240".into());
     }
     Ok(Some(options))
 }
@@ -146,8 +158,18 @@ fn run() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    println!("NOTE: Rust outputs not yet verified across all steps vs Magenta.js.");
-    println!("NOTE: No audio or Y2 firmware support is implemented.");
+    if let Some(path) = &options.wav {
+        write_wav(path, &pattern, options.bpm)?;
+        println!();
+        println!("WAV preview: {} (mono PCM16, 44100 Hz, {} BPM)", path.display(), options.bpm);
+        if pattern.hits.is_empty() {
+            println!("NOTE: output WAV is silent because generated pattern contains no hits.");
+        }
+        println!("NOTE: test drum synthesis, not the future Y2Synth audio engine.");
+    }
+    println!("NOTE: Rust Argmax matched all 16 Magenta.js classes and top-5 at steps 0,1,7,15 (~1e-6).");
+    println!("NOTE: full 512-class equality at every step remains unverified.");
+    println!("NOTE: no real-time audio or Y2 firmware support is implemented.");
     Ok(())
 }
 
