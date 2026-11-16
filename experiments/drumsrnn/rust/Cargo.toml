@@ -4,8 +4,19 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 default-run = "y2synth-drumsrnn-weights"
-description = "Experimental offline loader for Magenta.js DrumsRNN checkpoint weights"
+description = "Experimental offline Rust Magenta DrumsRNN inference, WAV and live drum-machine prototype"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+cpal = { version = "=0.18.2", optional = true }
+
+[features]
+default = []
+# Enable CPAL / CoreAudio output in the interactive live CLI.
+live-audio = ["dep:cpal"]
+
+[[bin]]
+name = "live"
+path = "src/bin/live.rs"
+required-features = ["live-audio"]
