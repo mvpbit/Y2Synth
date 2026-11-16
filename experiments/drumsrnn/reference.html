@@ -141,10 +141,26 @@
         const meanTopProbability = maxProbs.reduce((a, b) => a + b, 0) / maxProbs.length;
         // First-step probabilities are deterministic for the same silent seed,
         // even when subsequent sampled steps use randomness.
-        const firstTopFive = Array.from({length: 512}, (_, i) => i)
-          .sort((a, b) => probabilities[0][b] - probabilities[0][a])
-          .slice(0, 5)
-          .map(i => [i, probabilities[0][i]]);
+        const diagnosticSteps = [0, 1, 7, 15];
+        const selectedProbabilities = diagnosticSteps.map(step => ({
+          step,
+          topFive: Array.from({length: 512}, (_, i) => i)
+            .sort((a, b) => probabilities[step][b] - probabilities[step][a])
+            .slice(0, 5)
+            .map(i => [i, probabilities[step][i]]),
+        }));
+        // Default pitch classes from Magenta.js music/src/core/constants.ts.
+        const pitchBits = new Map([36, 38, 42, 46, 45, 48, 50, 49, 51]
+          .map((pitch, bit) => [pitch, bit]));
+        const sampledClassIds = Array.from({length: 16}, () => 0);
+        for (const [step, pitch] of notes) {
+          const bit = pitchBits.get(pitch);
+          if (!Number.isInteger(step) || step < 0 || step >= 16 || bit === undefined) {
+            throw new Error("Unexpected drum event in generated NoteSequence");
+          }
+          sampledClassIds[step] |= (1 << bit);
+        }
+        const firstTopFive = selectedProbabilities[0].topFive;
 
         savedResult = {
           experiment: "Y2Synth Magenta.js DrumsRNN reference",
@@ -164,6 +180,8 @@
           continuationMatchesPrimer: repeatsPrimer,
           meanTopProbability,
           firstTopFive,
+          selectedProbabilities,
+          sampledClassIds,
           probabilities,
         };
         status.textContent = "Reference generation succeeded. JSON export is optional.";
@@ -176,8 +194,14 @@
           "Generated hits: " + notes.length,
           "Output equals input: " + (isFromScratch ? "not applicable (no user input)" : (repeatsPrimer ? "YES" : "NO")),
           "Mean maximum class probability: " + meanTopProbability.toFixed(4),
-          "First generated step — top 5 classes [id, probability]:",
-          JSON.stringify(firstTopFive.map(([id, p]) => [id, Number(p.toFixed(6))])),
+          "Sampled class IDs (16 steps):",
+          JSON.stringify(sampledClassIds),
+          "Top 5 class probabilities at steps 0, 1, 7, 15:",
+          ...selectedProbabilities.map(({step, topFive}) =>
+            "Step " + step + ": " + JSON.stringify(
+              topFive.map(([id, p]) => [id, Number(p.toFixed(6))]))
+            )
+          ),
           "Hits [step, MIDI pitch]:",
           JSON.stringify(notes, null, 2),
           "Probability matrix: 16 × 512; saved in JSON only.",
