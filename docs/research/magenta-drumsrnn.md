@@ -174,3 +174,46 @@ http://127.0.0.1:8765/experiments/drumsrnn/reference.html
 **Интерпретация:** веса и runtime способны выдавать вариации исходного паттерна. Вывод **не доказывает** качество ритмов или стабильную производительность. Модель с вероятностным сэмплированием может выдавать разные результаты на повторных запусках. Данное измерение 243 ms нельзя переносить на Rust и Innioasis Y2.
 
 **Следующие действия:** сохранить экспортированный JSON с вероятностями одного удачного запуска (пока без добавления автоматически скачанного файла в Git); выполнить ещё несколько прогретых измерений и записать браузер/TF.js backend; затем сделать верифицируемый эталон для будущего Rust inference.
+
+## Product requirement update — autonomous generation (2026-11-17)
+
+**Explicit user requirement:** AI must **generate complete new drum patterns from scratch**, **not** require a human pattern and **not** be built around human-pattern continuation or variations. Prior primer experiments only established that the weights and runtime work; they are not the intended product interaction.
+
+### Technical adaptation
+
+The official Magenta Python CLI starts with an **implicit single bass-drum hit** when no primer is supplied (see `drums_rnn_generate.py`). The Magenta.js `MusicRNN.continueSequence` API requires an input `NoteSequence`; its implementation calls `DrumsOneHotConverter.toTensor`. This converter maps an empty step to index 0 (the no-drum class) as long as `totalQuantizedSteps` is a positive number. To preserve the product's no-user-input behavior without injecting any programmed drum groove, use exactly **one silent bootstrap step** internally:
+
+```js
+const silentSeed = {
+  notes: [],
+  quantizationInfo: {stepsPerQuarter: 4},
+  tempos: [{time: 0, qpm: 120}],
+  timeSignatures: [{time: 0, numerator: 4, denominator: 4}],
+  totalQuantizedSteps: 1,
+};
+const continuation = await model.continueSequenceAndReturnProbabilities(
+  silentSeed, 16, 1.0
+);
+```
+
+**This is musically from scratch, but is not mathematically zero-input unconditional sampling:** RNN needs an initial event/state to compute its first output. Here the bootstrap event is silence and is **not** included in the resulting 16-step pattern. The actual output from this mode on Mac **has not yet been tested**. Possible failure modes include an all-silent result or suboptimal groove quality. If it fails, investigate the official one-kick internal seed and/or a different pretrained model. Even in the one-kick fallback, no user groove is required.
+
+### Mac smoke test
+
+The experimental `reference.html` now defaults to **From scratch — no user input** and **Temperature 1.0**. Older regular/syncopated patterns remain as explicit diagnostic modes only.
+
+```bash
+git pull --ff-only
+python3 -m http.server 8765 --bind 127.0.0.1
+```
+
+Open `http://127.0.0.1:8765/experiments/drumsrnn/reference.html`, choose **From scratch — no user input**, then **Generate pattern**. Record **Generated hits**, **Input MIDI hits** (must be 0), **Generation time**, and drum events. Re-run 2-3 times. Save reference JSON locally when working; do not commit downloaded weights or large debug outputs.
+
+Source:
+- [Magenta.js MusicRNN internals](https://github.com/magenta/magenta-js/blob/master/music/src/music_rnn/model.ts)
+- [Magenta.js DrumsOneHotConverter](https://github.com/magenta/magenta-js/blob/master/music/src/core/data.ts)
+- [Original Magenta drums_rnn_generate.py default primer](https://github.com/magenta/magenta/blob/main/magenta/models/drums_rnn/drums_rnn_generate.py)
+
+### Target user interaction
+
+`Generate -> model produces a candidate 16/32/64-step drum pattern -> preview -> accept to drum sequencer or regenerate`. Length, BPM, density/style and temperature can be user controls **without any requirement to enter musical notes**. Note: the current pretrained DrumsRNN does not automatically support explicit density/style conditioning; these would require additional research or post-filtering, and are not implemented.
