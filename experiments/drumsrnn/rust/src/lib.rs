@@ -10,6 +10,7 @@ pub mod kit;
 pub mod dsp;
 pub mod sequencer;
 pub mod project;
+pub mod application;
 pub mod ui;
 #[cfg(feature = "live-audio")]
 pub mod realtime;
