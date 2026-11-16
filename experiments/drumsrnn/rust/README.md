@@ -27,7 +27,7 @@ Expected for the checkpoint already inspected on Mac:
 - 11,871,400 decoded weight bytes (11.32 MiB)
 - attention length 32
 
-**Still not verified:** new CPAL live output, strict real-time safety, controlled runtime benchmarks, cross-compilation, or running on Innioasis Y2. Production drum DSP is not implemented. The WAV renderer is a simple preview, not the final instrument. Loading and decoding all weights uses RAM; embedded suitability has not been established.
+**Still not verified:** detailed CPAL live command and long-run behavior, strict real-time safety, controlled runtime benchmarks, cross-compilation, or running on Innioasis Y2. Production drum DSP is not implemented. The WAV renderer is a simple preview, not the final instrument. Loading and decoding all weights uses RAM; embedded suitability has not been established.
 
 The checkpoint-loader tests and LSTM tests use synthetic small matrices; do not mistake a passing unit test for proof of full neural network equivalence. `cargo run --release` loads the real checkpoint and runs **one step per pretrained LSTM layer with a synthetic zero input vector**, which validates finite computations and compatible dimensions, **not a real generated drum event**. Next we need to build the attention wrapper and compare full inference against Magenta.js.
 
@@ -136,7 +136,7 @@ An interactive experimental macOS output app has been added:
 - `src/bin/live.rs` opens the default output device with `cpal 0.18.2` (CoreAudio on macOS), sends precomputed mono samples to all output channels, and accepts commands from stdin;
 - model inference, pattern generation and loop rendering run on the CLI/control thread, never inside the audio callback.
 
-**Code status:** this is the first implementation and **has not yet been compiled, tested or auditioned on the user's Mac**. The `sequencer.rs` module is now exported from `lib.rs`, so its unit tests will run with ordinary `cargo test`; the live binary needs the opt-in feature `live-audio`.
+**Code status:** the user reported the first live prototype works on Mac on 2026-11-17. Detailed verification of each interactive command, regression tests and real-time safety remains pending. The `sequencer.rs` module is now exported from `lib.rs`, so its unit tests will run with ordinary `cargo test`; the live binary needs the opt-in feature `live-audio`.
 
 From the Y2Synth repository root:
 
