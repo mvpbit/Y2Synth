@@ -21,8 +21,10 @@
   <h1>Y2Synth · DrumsRNN</h1>
   <p class="secondary">Reference inference on Mac, not Rust or Y2. Loads weights from this local HTTP server.</p>
   <p>Checkpoint: <code>models/drum_kit_rnn_tfjs/</code></p>
-  <p>Primer: 16 steps (kick + snare + hi-hat). Continuation: 16 steps.
-    Sampling: argmax (no temperature), for a reproducible reference.</p>
+  <p>Primer: 16 steps. Continuation: 16 steps. Sampling: argmax (no randomness).</p>
+  <label for="primerSelect">Input pattern:</label>
+  <select id="primerSelect"><option value="regular">Regular groove (original)</option><option value="syncopated">Syncopated groove (control test)</option></select>
+  <p class="secondary">Switch the input pattern to check whether the continuation reacts to its context.</p>
   <button id="run">Generate reference</button>
   <button id="save" disabled>Save JSON</button>
   <p id="status" role="status">Ready.</p>
@@ -31,6 +33,7 @@
     "use strict";
     const runButton = document.getElementById("run");
     const saveButton = document.getElementById("save");
+    const primerSelect = document.getElementById("primerSelect");
     const status = document.getElementById("status");
     const result = document.getElementById("result");
     const checkpoint = new URL("./models/drum_kit_rnn_tfjs", window.location.href).href.replace(/\/$/, "");
@@ -57,9 +60,29 @@
       totalQuantizedSteps: 16,
     };
 
+    const syncopatedNotes = [
+      [0, 36], [1, 42], [3, 42], [4, 38], [5, 42],
+      [7, 36], [7, 42], [9, 42], [10, 36], [11, 42],
+      [12, 38], [13, 42], [15, 42],
+    ].map(([step, pitch]) => ({
+      pitch, quantizedStartStep: step, quantizedEndStep: step + 1,
+      isDrum: true, velocity: 100,
+    }));
+    const primers = {
+      regular: primer,
+      syncopated: {...primer, notes: syncopatedNotes},
+    };
+
+    function hitPairs(sequence) {
+      return (sequence.notes || [])
+        .map(n => [n.quantizedStartStep, n.pitch])
+        .sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    }
+
     runButton.addEventListener("click", async () => {
       runButton.disabled = true;
       saveButton.disabled = true;
+      primerSelect.disabled = true;
       savedResult = null;
       result.textContent = "Loading...";
       let model;
@@ -75,13 +98,22 @@
 
         status.textContent = "Generating 16 steps with argmax...";
         const genStart = performance.now();
-        const response = await model.continueSequenceAndReturnProbabilities(primer, 16);
+        const primerId = primerSelect.value;
+        const selectedPrimer = primers[primerId];
+        if (!selectedPrimer) throw new Error("Unknown input pattern");
+        const response = await model.continueSequenceAndReturnProbabilities(selectedPrimer, 16);
         const sequence = await response.sequence;
         const generationMs = performance.now() - genStart;
         const probabilities = response.probs.map(row => Array.from(row));
         if (probabilities.length !== 16 || probabilities.some(row => row.length !== 512)) {
           throw new Error("Unexpected probability matrix shape");
         }
+
+        const notes = hitPairs(sequence);
+        const inputHits = hitPairs(selectedPrimer);
+        const repeatsPrimer = JSON.stringify(notes) === JSON.stringify(inputHits);
+        const maxProbs = probabilities.map(row => Math.max(...row));
+        const meanTopProbability = maxProbs.reduce((a, b) => a + b, 0) / maxProbs.length;
 
         savedResult = {
           experiment: "Y2Synth Magenta.js DrumsRNN reference",
@@ -92,17 +124,21 @@
           timestamp: new Date().toISOString(),
           loadMs: Number(loadMs.toFixed(2)),
           generationMs: Number(generationMs.toFixed(2)),
-          primer,
+          primerId,
+          primer: selectedPrimer,
           continuation: sequence,
+          continuationMatchesPrimer: repeatsPrimer,
+          meanTopProbability,
           probabilities,
         };
-        const notes = (sequence.notes || []).map(n =>
-          [n.quantizedStartStep, n.pitch]).sort((a, b) => a[0] - b[0]);
         status.textContent = "Reference generation succeeded. Save JSON for comparisons.";
         result.textContent = [
           "Model initialization: " + loadMs.toFixed(1) + " ms",
           "Generation (16 steps): " + generationMs.toFixed(1) + " ms",
+          "Primer: " + primerId + " (" + inputHits.length + " hits)",
           "Generated hits: " + notes.length,
+          "Generated continuation equals primer: " + (repeatsPrimer ? "YES" : "NO"),
+          "Mean maximum class probability: " + meanTopProbability.toFixed(4),
           "Hits [step, MIDI pitch]:",
           JSON.stringify(notes, null, 2),
           "Probability matrix: 16 × 512; saved in JSON only.",
@@ -115,6 +151,7 @@
       } finally {
         if (model) model.dispose();
         runButton.disabled = false;
+        primerSelect.disabled = false;
       }
     });
 
