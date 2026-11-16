@@ -275,7 +275,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     stream.play()?; // Audio stream runs, transport remains stopped until PLAY.
 
     let seed = Cell::new(options.seed);
-    let mut drum_generator = || {
+    let mut drum_generator = || -> io::Result<GeneratedPattern> {
         let next_seed = seed.get().wrapping_add(0x9e37_79b9_7f4a_7c15);
         let pattern = generate(
             &network, 16, Sampling::Temperature(options.temperature), next_seed,
