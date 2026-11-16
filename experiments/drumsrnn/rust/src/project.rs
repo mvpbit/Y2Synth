@@ -57,6 +57,7 @@ impl<T> Track<T> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct MusicProject<Synth1, Synth2, Drums> {
     mode: CreationMode,
+    bpm: f32,
     synth1: Option<Track<Synth1>>,
     synth2: Option<Track<Synth2>>,
     drums: Option<Track<Drums>>,
@@ -74,6 +75,7 @@ impl<Synth1, Synth2, Drums> Default for MusicProject<Synth1, Synth2, Drums> {
     fn default() -> Self {
         Self {
             mode: CreationMode::User,
+            bpm: 120.0,
             synth1: None,
             synth2: None,
             drums: None,
@@ -84,6 +86,19 @@ impl<Synth1, Synth2, Drums> Default for MusicProject<Synth1, Synth2, Drums> {
 impl<Synth1, Synth2, Drums> MusicProject<Synth1, Synth2, Drums> {
     pub fn mode(&self) -> CreationMode {
         self.mode
+    }
+
+    pub fn bpm(&self) -> f32 {
+        self.bpm
+    }
+
+    /// Shared tempo of all three tracks. A saved project includes this value.
+    pub fn set_bpm(&mut self, bpm: f32) -> Result<(), &'static str> {
+        if !bpm.is_finite() || !(40.0..=240.0).contains(&bpm) {
+            return Err("BPM must be finite and in 40..=240");
+        }
+        self.bpm = bpm;
+        Ok(())
     }
 
     pub fn synth1(&self) -> Option<&Track<Synth1>> {
@@ -174,6 +189,7 @@ mod tests {
         let project = TestProject::default();
         assert!(!project.has_content());
         assert_eq!(project.mode(), CreationMode::User);
+        assert_eq!(project.bpm(), 120.0);
     }
 
     #[test]
@@ -220,6 +236,21 @@ mod tests {
         assert_eq!(session.last_saved().unwrap().mode(), CreationMode::User);
         assert_eq!(session.last_saved().unwrap().drums().unwrap().content, vec![36]);
         assert_eq!(session.current().drums().unwrap().content, vec![38]);
+    }
+
+    #[test]
+    fn tempo_is_saved_with_music_and_invalid_values_do_not_mutate_it() {
+        let mut session: MusicSession<(), (), Vec<u8>> = MusicSession::default();
+        session.current_mut().replace_drums(vec![36], CreationMode::User);
+        session.current_mut().set_bpm(92.5).unwrap();
+        session.save_current();
+        session.current_mut().set_bpm(160.0).unwrap();
+        assert_eq!(session.last_saved().unwrap().bpm(), 92.5);
+        assert_eq!(session.current().bpm(), 160.0);
+        for bpm in [0.0, 39.0, 241.0, f32::INFINITY, f32::NAN] {
+            assert!(session.current_mut().set_bpm(bpm).is_err());
+        }
+        assert_eq!(session.current().bpm(), 160.0);
     }
 
     #[test]
