@@ -6,7 +6,7 @@
 //! Shapes below correspond to the particular 3×256 DrumsRNN checkpoint.
 
 use crate::lstm::{BasicLstmCell, LstmState};
-use crate::{Checkpoint, Tensor};
+use crate::Checkpoint;
 use std::io::{self, ErrorKind};
 
 const HIDDEN: usize = 256;
@@ -26,7 +26,7 @@ fn tensor<'a>(
         .tensors
         .get(name)
         .ok_or_else(|| invalid(format!("Missing tensor {name}")))?;
-    if value.shape != required_shape
+    if value.shape.as_slice() != required_shape
         || value.values.len() != required_shape.iter().product::<usize>()
     {
         return Err(invalid(format!(
@@ -342,6 +342,7 @@ pub fn softmax(logits: &[f32], temperature: f32) -> io::Result<Vec<f32>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Tensor;
     use std::collections::BTreeMap;
 
     fn empty_tensor(shape: &[usize]) -> Tensor {
