@@ -341,6 +341,47 @@ mod tests {
     }
 
     #[test]
+    fn menu_navigation_reaches_real_drum_ai_and_saved_playback() {
+        use crate::ui::{InputEvent, MenuController};
+
+        let mut app = ApplicationController::new(8_000, 120.0).unwrap();
+        let mut audio = TestAudio::default();
+        app.install_initial_drums(pattern(36), DrumKit::default(), &mut audio).unwrap();
+        let mut calls = 0usize;
+        let mut generator = || {
+            calls += 1;
+            Ok(pattern(42))
+        };
+
+        let mut menu = MenuController::default();
+        menu.handle(InputEvent::CenterPressed);   // PLAY settings
+        menu.handle(InputEvent::Next);            // AI
+        menu.handle(InputEvent::CenterPressed);   // AI menu
+        menu.handle(InputEvent::Next);            // Generate Track
+        menu.handle(InputEvent::CenterPressed);   // Choose track
+        menu.handle(InputEvent::Next);            // Synth 2
+        menu.handle(InputEvent::Next);            // Drums
+        let command = menu.handle(InputEvent::CenterPressed).unwrap();
+        assert_eq!(
+            app.dispatch(command, &mut generator, &mut audio).unwrap(),
+            AppResponse::DrumGenerated { hits: 1 },
+        );
+        assert_eq!(calls, 1);
+        assert_eq!(app.session().last_saved().unwrap().drums().unwrap().content.pattern.hits[0].pitch, 42);
+
+        menu.handle(InputEvent::BackPressed);     // AI menu
+        menu.handle(InputEvent::BackPressed);     // PLAY settings
+        menu.handle(InputEvent::BackPressed);     // Home
+        let play = menu.handle(InputEvent::PlayPressed).unwrap();
+        assert_eq!(
+            app.dispatch(play, &mut generator, &mut audio).unwrap(),
+            AppResponse::PlayingLast { mode: CreationMode::Ai, bpm: 120.0 }
+        );
+        assert_eq!(calls, 1); // PLAY is replay, not regeneration
+        assert_eq!(audio.starts, 1);
+    }
+
+    #[test]
     fn invalid_app_bpm_is_rejected_before_audio_queue() {
         assert!(ApplicationController::new(0, 120.0).is_err());
         assert!(ApplicationController::new(8_000, f32::NAN).is_err());
