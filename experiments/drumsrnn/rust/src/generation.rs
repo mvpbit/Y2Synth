@@ -72,7 +72,7 @@ pub fn decode_class(class: usize, step: usize) -> io::Result<Vec<DrumHit>> {
         return Err(invalid("Drum class must be in 0..512"));
     }
     Ok(DRUM_PITCHES.iter().enumerate()
-        .filter(|(bit, _)| (class & (1 << bit)) != 0)
+        .filter(|(bit, _)| (class & (1usize << *bit)) != 0)
         .map(|(_, &pitch)| DrumHit { step, pitch })
         .collect())
 }
