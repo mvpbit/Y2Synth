@@ -1,14 +1,17 @@
 //! Interactive live DrumsRNN preview for macOS (CPAL / CoreAudio).
 //!
 //! The network and per-bar drum rendering run ONLY on the CLI/control thread.
-//! The audio callback reads pre-rendered samples and receives control messages.
-//! First prototype; no claim of fully real-time-safe buffer reclamation.
+//! Audio receives pre-rendered samples through a lock-free triple buffer.
+//! Playback state is an atomic flag. The callback does not own or destroy
+//! audio buffers. This remains a prototype pending xrun/latency profiling.
 
 use std::env;
 use std::error::Error;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use triple_buffer::triple_buffer;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -18,14 +21,9 @@ use y2synth_drumsrnn_weights::{
     attention::AttentionRnn,
     generation::{generate, GeneratedPattern, Sampling, DRUM_PITCHES},
     load_checkpoint,
-    sequencer::{prepare_loop, LiveSequencer, PreparedLoop},
+    realtime::RealtimePlayer,
+    sequencer::{prepare_loop, PreparedLoop},
 };
-
-enum Command {
-    Cue(PreparedLoop),
-    Play,
-    Stop,
-}
 
 struct Options {
     weights: PathBuf,
@@ -101,8 +99,7 @@ fn validate_bpm(bpm: f32) -> Result<(), Box<dyn Error>> {
 fn build_stream<T>(
     device: &cpal::Device,
     config: StreamConfig,
-    receiver: Receiver<Command>,
-    mut sequencer: LiveSequencer,
+    mut player: RealtimePlayer,
 ) -> Result<Stream, Box<dyn Error>>
 where
     T: Sample + SizedSample + FromSample<f32>,
@@ -111,20 +108,10 @@ where
     let stream = device.build_output_stream(
         config,
         move |output: &mut [T], _info| {
-            // Non-blocking channel receive. This is a prototype: std::mpsc
-            // internally synchronizes, and dropping buffers in cue() may
-            // deallocate memory on this thread; further RT hardening is needed.
-            while let Ok(command) = receiver.try_recv() {
-                match command {
-                    Command::Cue(buffer) => {
-                        let _ = sequencer.cue(buffer);
-                    }
-                    Command::Play => sequencer.play(),
-                    Command::Stop => sequencer.stop(),
-                }
-            }
+            // Only atomic flag reads, triple-buffer slot swaps and copying
+            // prepared samples; no channel locks, allocations or buffer frees.
             for frame in output.chunks_mut(channels) {
-                let mono = sequencer.tick();
+                let mono = player.tick();
                 for sample in frame {
                     *sample = T::from_sample(mono);
                 }
@@ -162,10 +149,6 @@ fn show_pattern(pattern: &GeneratedPattern, seed: u64) {
     }
 }
 
-fn send_command(sender: &Sender<Command>, command: Command) -> Result<(), Box<dyn Error>> {
-    sender.send(command).map_err(|_| "Audio stream is no longer receiving commands".into())
-}
-
 fn run() -> Result<(), Box<dyn Error>> {
     let Some(options) = parse_options()? else { return Ok(()); };
 
@@ -193,19 +176,27 @@ fn run() -> Result<(), Box<dyn Error>> {
     )?;
     show_pattern(&current_pattern.0, seed);
 
-    let sequencer = LiveSequencer::new(sample_rate)?;
-    let (sender, receiver) = mpsc::channel::<Command>();
+    // Two spare triple-buffer slots are owned by the control thread and one
+    // by audio. Producer overwrites/deallocates old loops only on this thread.
+    let initial = PreparedLoop {
+        samples: vec![],
+        bpm,
+        sample_rate,
+    };
+    let (mut input, output) = triple_buffer(&initial);
+    let playing = Arc::new(AtomicBool::new(false));
+    let player = RealtimePlayer::new(output, playing.clone(), sample_rate)?;
     let stream = match sample_format {
-        SampleFormat::F32 => build_stream::<f32>(&device, config, receiver, sequencer)?,
-        SampleFormat::I16 => build_stream::<i16>(&device, config, receiver, sequencer)?,
-        SampleFormat::U16 => build_stream::<u16>(&device, config, receiver, sequencer)?,
-        SampleFormat::I32 => build_stream::<i32>(&device, config, receiver, sequencer)?,
-        SampleFormat::U32 => build_stream::<u32>(&device, config, receiver, sequencer)?,
-        SampleFormat::F64 => build_stream::<f64>(&device, config, receiver, sequencer)?,
+        SampleFormat::F32 => build_stream::<f32>(&device, config, player)?,
+        SampleFormat::I16 => build_stream::<i16>(&device, config, player)?,
+        SampleFormat::U16 => build_stream::<u16>(&device, config, player)?,
+        SampleFormat::I32 => build_stream::<i32>(&device, config, player)?,
+        SampleFormat::U32 => build_stream::<u32>(&device, config, player)?,
+        SampleFormat::F64 => build_stream::<f64>(&device, config, player)?,
         other => return Err(format!("Unsupported default audio sample format: {other:?}").into()),
     };
-    // Initial pattern is cued, but playback starts only with 'play'.
-    send_command(&sender, Command::Cue(current_pattern.1))?;
+    // Publish first pattern before the CoreAudio callback starts.
+    input.write(current_pattern.1);
     stream.play()?;
 
     println!();
@@ -224,19 +215,19 @@ fn run() -> Result<(), Box<dyn Error>> {
         if words.is_empty() { continue; }
         match words.as_slice() {
             ["play"] => {
-                send_command(&sender, Command::Play)?;
+                playing.store(true, Ordering::Relaxed);
                 println!("Playing (loop on).");
             }
             ["stop"] => {
-                send_command(&sender, Command::Stop)?;
+                playing.store(false, Ordering::Relaxed);
                 println!("Stopping with short fade.");
             }
             ["regenerate"] => {
                 seed = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
                 let (pattern, buffer) =
                     next_pattern(&network, seed, options.temperature, bpm, sample_rate)?;
-                send_command(&sender, Command::Cue(buffer))?;
-                println!("New AI-generated pattern queued for next bar (or immediately if stopped).");
+                input.write(buffer);
+                println!("New AI-generated pattern published for next bar (or immediately if stopped).");
                 show_pattern(&pattern, seed);
                 current_pattern.0 = pattern;
             }
@@ -246,7 +237,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                 }) {
                     Some(next_bpm) => {
                         let buffer = prepare_loop(&current_pattern.0, next_bpm, sample_rate)?;
-                        send_command(&sender, Command::Cue(buffer))?;
+                        input.write(buffer);
                         bpm = next_bpm;
                         println!("Tempo {bpm} BPM queued for next bar (or immediately if stopped).");
                     }
@@ -262,7 +253,8 @@ fn run() -> Result<(), Box<dyn Error>> {
             _ => println!("Unknown command. Try: play | stop | bpm 140 | regenerate | status | quit"),
         }
     }
-    // Drop the stream after leaving the loop. No WAV file is ever created.
+    // Stream shutdown happens on the CLI thread. No WAV file is created.
+    playing.store(false, Ordering::Relaxed);
     drop(stream);
     println!("Bye.");
     Ok(())
