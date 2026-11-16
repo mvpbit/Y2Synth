@@ -3,6 +3,7 @@
 
 pub mod lstm;
 pub mod attention;
+pub mod generation;
 
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashSet};
