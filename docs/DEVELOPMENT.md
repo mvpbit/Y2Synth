@@ -133,3 +133,22 @@ quit
 **Проверено через GitHub:** обновлённый `experiments/drumsrnn/rust/Cargo.lock` уже содержит `triple_buffer` и находится в `main`. Для последующих воспроизводимых сборок можно вернуться к флагу `--locked`.
 
 Следующий этап: стресс-тесты многократной регенерации/смены темпа, оценка нагрузки CPU/памяти и буферизации, затем улучшение качества барабанного синтеза. Для Y2Linux сохраняется отдельная задача проверки реальной аппаратной платформы.
+
+## Архитектурный каркас меню PLAY (2026-11-17)
+
+Добавлены `experiments/drumsrnn/rust/src/ui.rs` и `src/project.rs`, экспортированы из `lib.rs`. Это чистый переносимый Rust, без новых зависимостей и без изменений работающего `live.rs`.
+
+- `MenuController`: конечный автомат, принимает `PlayPressed`, `CenterPressed`, `BackPressed`, `Next`, `Previous`; охватывает Home → PlaySettings → USER/Synth1/Synth2/Drums и AI/Generate All/Generate Track/Synth1/Synth2/Drums. Возвращает `Command` для будущего app coordinator, ничего не генерирует сам.
+- `MusicProject<S1,S2,D>`: три независимые типизированные дорожки, `Track.source` и последний способ редактирования `CreationMode`. `GeneratedAll` заменяет все три разом; отдельные `replace_*` изменяют только целевую.
+- `MusicSession`: рабочее состояние и `last_saved` с явным `save_current`. **Только RAM**, ещё нет хранения между перезапусками.
+- Unit-тесты покрывают навигацию, BACK, единичную/все AI-команды, PLAY без генерации, независимые треки, сохранённый снимок.
+- Отсутствуют реальные AI-генераторы синтезаторов, экран Y2, аппаратная раскладка кнопок, сериализация, интеграция с CPAL, real-time transport и обработчики всех UI-команд.
+- **Сборка нового каркаса на Mac пока не подтверждена.** Проверить:
+
+```bash
+cargo test --locked --manifest-path experiments/drumsrnn/rust/Cargo.toml
+cargo test --locked --manifest-path experiments/drumsrnn/rust/Cargo.toml --features live-audio
+```
+
+После этого можно проектировать coordinator, который маршрутизирует `GenerateTrack(Drums)` в существующий DrumsRNN, а для `GenerateTrack(Synth1/Synth2)` и `GenerateAll` пока возвращает явный статус «ещё не реализовано», **не меняя текущего проекта**.
+
