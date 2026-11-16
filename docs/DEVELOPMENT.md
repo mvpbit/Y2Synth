@@ -6,7 +6,7 @@
 
 - Репозиторий: `mvpbit/Y2Synth`, основная рабочая ветка **`main`**.
 - Исследовательская ветка `research/magenta-drumsrnn-feasibility` ранее смержена и удалена. По просьбе пользователя новые экспериментальные изменения идут сразу в `main` без PR.
-- Весовые файлы checkpoint остаются локальными; **не коммитить**. `Cargo.lock` уже закоммичен для воспроизводимости.
+- Весовые файлы checkpoint остаются локальными; **не коммитить**. После добавления CPAL `Cargo.lock` требует пересоздания и нового коммита: существующая версия lockfile **пока устарела**.
 - Концепция: два синтезатора и драм-машина; текущая реализация фокусируется только на автономных AI-барабанах.
 - AI должен генерировать с нуля, без исходного ритма пользователя; один *внутренний* тихий bootstrap-шаг допустим.
 
@@ -21,8 +21,8 @@
 ## Что сейчас есть в Git, но требует работы
 
 - `experiments/drumsrnn/rust/src/audio.rs`: после успешного WAV-прогона добавлен рендер при заданной sample rate. Необходимо повторно прогнать тесты.
-- `experiments/drumsrnn/rust/src/sequencer.rs`: заготовка loop-транспорта, pre-rendered баров, плавной смены на границе такта. **Модуль пока не экспортирован в `src/lib.rs`, не компилировался и его unit-тесты фактически не выполнялись.**
-- **Нет** CPAL в `Cargo.toml`, **нет** live-аудио CLI, непрерывное воспроизведение из Rust пока не реализовано.
+- `experiments/drumsrnn/rust/src/sequencer.rs`: подключён через `pub mod sequencer;` в `lib.rs`; содержит unit-тесты loop-транспорта и смены на границе такта. **В текущем окружении нет Rust-компилятора, поэтому новые тесты ещё не выполнялись.**
+- В `Cargo.toml` есть **опциональный CPAL 0.18.2** (фича `live-audio`) и `src/bin/live.rs`: пробная программа с `play`, `stop`, `bpm`, `regenerate`, `status`, `quit`. Звук выводится из предварительно подготовленных PCM-буферов в callback CoreAudio. **Ни сборка, ни реальное воспроизведение на Mac пока не проверены.**
 - На Innioasis Y2 ничего не запускалось, производительность и совместимость устройства неизвестны.
 
 ## Команды из корня проекта на Mac
@@ -38,13 +38,13 @@ bash experiments/drumsrnn/download-model.sh
 ```bash
 git switch main
 git pull --ff-only
-cargo test --locked --manifest-path experiments/drumsrnn/rust/Cargo.toml
+cargo test --manifest-path experiments/drumsrnn/rust/Cargo.toml
 ```
 
 Создать AI-грув, сохранить и прослушать тестовый WAV:
 
 ```bash
-cargo run --release --locked \
+cargo run --release \
   --manifest-path experiments/drumsrnn/rust/Cargo.toml \
   --bin generate -- \
   --steps 16 --temperature 1.2 --bpm 120 \
@@ -76,10 +76,38 @@ cargo run --release --locked \
 
 **Довести live-секвенсор до первой проверенной сборки**, прежде чем добавлять дополнительные функции:
 
-1. Экспортировать `pub mod sequencer;` из `lib.rs`.
-2. Выполнить `cargo test --locked`, найти и исправить ошибки компиляции/тайминга.
-3. Подключить macOS-аудиовывод (вероятно CPAL), оставив инференс и подготовку аудио вне callback.
-4. Добавить интерактивный CLI `play / stop / bpm / regenerate / quit`.
-5. Протестировать на Mac непрерывное воспроизведение и изменения на границе такта.
+1. **На Mac** выполнить `cargo test --features live-audio` и исправить возможные ошибки. Сохранить обновлённый `Cargo.lock` в Git после подтверждённой сборки.
+2. Запустить `cargo run --release --features live-audio --bin live` (с `--manifest-path`, если запуск из корня репозитория).
+3. Проверить `play / stop / bpm / regenerate / quit`: темп, смену на границе такта, звук, щелчки и стабильность.
+4. Заменить потенциально real-time-небезопасные `std::mpsc` и освобождение старых буферов в audio callback на неблокирующий, контролируемый механизм.
+5. Измерить задержку, CPU и xrun на реальном Mac.
 
 После каждого изменения обновлять эту страницу. Более длинные исследовательские протоколы: [Magenta DrumsRNN](research/magenta-drumsrnn.md).
+
+## Live CLI: запланированная проверка на Mac
+
+```bash
+git switch main
+git pull --ff-only
+
+# Без --locked при первом запуске: CPAL ещё не внесён в Cargo.lock.
+cargo test --manifest-path experiments/drumsrnn/rust/Cargo.toml --features live-audio
+
+cargo run --release --manifest-path experiments/drumsrnn/rust/Cargo.toml \
+  --features live-audio --bin live -- --bpm 120 --temperature 1.2
+```
+
+В интерактивном терминале:
+
+```text
+play
+regenerate
+bpm 140
+stop
+play
+quit
+```
+
+Текущая реализация готовит новый AI-паттерн и звуковой цикл на основном потоке CLI; пока этот поток рассчитывает ритм, аудио-CBAL callback читает старый подготовленный буфер. Команда `regenerate` не требует исходного грува пользователя. Не путать отсутствие промежуточного WAV с отсутствием *заранее подготовленных в памяти* PCM-буферов.
+
+После первой успешной сборки и прослушивания необходимо зафиксировать обновлённый `Cargo.lock` в `main`; только затем вернуться к `--locked` для воспроизводимых проверок. Это не production realtime: `std::sync::mpsc` и освобождение объектов в callback ещё требуют переработки.
