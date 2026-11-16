@@ -183,7 +183,6 @@ pub fn write_wav(path: &Path, pattern: &GeneratedPattern, bpm: f32) -> io::Resul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::generation::DrumHit;
     use std::fs;
 
     fn test_pattern(hits: Vec<DrumHit>) -> GeneratedPattern {
