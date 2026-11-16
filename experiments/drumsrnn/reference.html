@@ -26,7 +26,7 @@
   <select id="primerSelect"><option value="scratch">From scratch — no user input</option><option value="regular">Diagnostic: regular primer</option><option value="syncopated">Diagnostic: syncopated primer</option></select>
   <label for="samplingSelect">Sampling:</label>
   <select id="samplingSelect"><option value="argmax">Argmax (deterministic)</option><option value="1.0" selected>Temperature 1.0</option><option value="1.2">Temperature 1.2</option></select>
-  <p class="secondary">Temperature 1.0 gives varied results. The two diagnostic primer modes are for regression tests only, not the intended product workflow.</p>
+  <p class="secondary">Temperature 1.0/1.2 samples varied rhythms. Argmax is for deterministic numerical comparisons; from a silent seed it may output 16 silent steps because silence is the most probable class.</p>
   <button id="run">Generate pattern</button>
   <button id="play" disabled>▶ Preview groove</button>
   <button id="save" disabled>Save JSON</button>
@@ -184,7 +184,11 @@
           sampledClassIds,
           probabilities,
         };
-        status.textContent = "Reference generation succeeded. JSON export is optional.";
+        status.textContent = notes.length === 0
+          ? (samplingId === "argmax"
+             ? "Argmax completed: 16 silent steps. This is a valid deterministic model output, not a generation failure. Compare the class IDs and probabilities below."
+             : "Generation completed with 0 hits (silent output). Try sampling again or raise temperature.")
+          : "Reference generation succeeded. JSON export is optional.";
         result.textContent = [
           "Model initialization: " + loadMs.toFixed(1) + " ms",
           "Generation (16 steps): " + generationMs.toFixed(1) + " ms",
