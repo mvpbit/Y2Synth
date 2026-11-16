@@ -28,19 +28,27 @@
   <select id="samplingSelect"><option value="argmax">Argmax (deterministic)</option><option value="1.0" selected>Temperature 1.0</option><option value="1.2">Temperature 1.2</option></select>
   <p class="secondary">Temperature 1.0 gives varied results. The two diagnostic primer modes are for regression tests only, not the intended product workflow.</p>
   <button id="run">Generate pattern</button>
+  <button id="play" disabled>▶ Preview groove</button>
   <button id="save" disabled>Save JSON</button>
+  <p class="secondary">Preview uses simple synthesized drum sounds in Web Audio; it is not Y2Synth's future sound engine.</p>
   <p id="status" role="status">Ready.</p>
   <pre id="result">No result yet.</pre>
   <script>
     "use strict";
     const runButton = document.getElementById("run");
     const saveButton = document.getElementById("save");
+    const playButton = document.getElementById("play");
     const primerSelect = document.getElementById("primerSelect");
     const samplingSelect = document.getElementById("samplingSelect");
     const status = document.getElementById("status");
     const result = document.getElementById("result");
     const checkpoint = new URL("./models/drum_kit_rnn_tfjs", window.location.href).href.replace(/\/$/, "");
     let savedResult = null;
+    let latestSequence = null;
+    let audioContext = null;
+    let masterGain = null;
+    let noiseBuffer = null;
+    let playingUntil = 0;
 
     const primer = {
       notes: [
@@ -96,6 +104,8 @@
       primerSelect.disabled = true;
       samplingSelect.disabled = true;
       savedResult = null;
+      latestSequence = null;
+      playButton.disabled = true;
       result.textContent = "Loading...";
       let model;
       try {
@@ -164,6 +174,8 @@
           "Probability matrix: 16 × 512; saved in JSON only.",
         ].join("\n");
         saveButton.disabled = false;
+        latestSequence = sequence;
+        playButton.disabled = !sequence.notes || sequence.notes.length === 0;
       } catch (error) {
         status.textContent = "Experiment failed. See details below.";
         result.textContent = String(error && error.stack || error);
@@ -173,6 +185,95 @@
         runButton.disabled = false;
         primerSelect.disabled = false;
         samplingSelect.disabled = false;
+      }
+    });
+
+    // Audible preview uses only native Web Audio and does not depend on sample downloads.
+    // Deliberately approximate drum voices; only event timing and pitch class are tested.
+    function tone(ctx, at, hz, toHz, dur, type, level) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(hz, at);
+      osc.frequency.exponentialRampToValueAtTime(Math.max(20, toHz), at + dur);
+      gain.gain.setValueAtTime(level, at);
+      gain.gain.exponentialRampToValueAtTime(0.001, at + dur);
+      osc.connect(gain);
+      gain.connect(masterGain);
+      osc.start(at);
+      osc.stop(at + dur + 0.01);
+    }
+
+    function noise(ctx, at, dur, hpHz, level) {
+      const source = ctx.createBufferSource();
+      source.buffer = noiseBuffer;
+      const hp = ctx.createBiquadFilter();
+      hp.type = "highpass";
+      hp.frequency.value = hpHz;
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(level, at);
+      gain.gain.exponentialRampToValueAtTime(0.001, at + dur);
+      source.connect(hp);
+      hp.connect(gain);
+      gain.connect(masterGain);
+      source.start(at);
+      source.stop(at + dur);
+    }
+
+    function drum(ctx, at, pitch) {
+      if ([35,36].includes(pitch)) {
+        tone(ctx, at, 145, 48, 0.22, "sine", 0.7);
+      } else if ([38,40].includes(pitch)) {
+        noise(ctx, at, 0.17, 1000, 0.36);
+        tone(ctx, at, 175, 130, 0.09, "triangle", 0.16);
+      } else if ([42,44,46].includes(pitch)) {
+        noise(ctx, at, pitch === 46 ? 0.30 : 0.075, 6000, 0.19);
+      } else if ([49,51,52,53,55,57,59].includes(pitch)) {
+        noise(ctx, at, 0.46, 3800, 0.23);
+      } else if ([41,43,45,47,48,50].includes(pitch)) {
+        const freq = 110 + (pitch - 41) * 10;
+        tone(ctx, at, freq * 1.3, freq * 0.75, 0.18, "sine", 0.34);
+      } else {
+        noise(ctx, at, 0.12, 1500, 0.16);
+      }
+    }
+
+    playButton.addEventListener("click", async () => {
+      if (!latestSequence) return;
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) {
+        status.textContent = "Web Audio is unavailable in this browser.";
+        return;
+      }
+      try {
+        if (!audioContext) {
+          audioContext = new AudioContextClass();
+          masterGain = audioContext.createGain();
+          masterGain.gain.value = 0.22;
+          masterGain.connect(audioContext.destination);
+          const count = Math.ceil(audioContext.sampleRate);
+          noiseBuffer = audioContext.createBuffer(1, count, audioContext.sampleRate);
+          const samples = noiseBuffer.getChannelData(0);
+          for (let i = 0; i < count; i++) samples[i] = Math.random() * 2 - 1;
+        }
+        await audioContext.resume();
+        const now = audioContext.currentTime;
+        if (now < playingUntil) return;
+        const qpm = (latestSequence.tempos && latestSequence.tempos[0] &&
+          latestSequence.tempos[0].qpm) || 120;
+        const quarterSteps = (latestSequence.quantizationInfo &&
+          latestSequence.quantizationInfo.stepsPerQuarter) || 4;
+        const stepSec = 60 / qpm / quarterSteps;
+        const startAt = now + 0.08;
+        const notes = latestSequence.notes || [];
+        for (const note of notes) {
+          drum(audioContext, startAt + note.quantizedStartStep * stepSec, note.pitch);
+        }
+        playingUntil = startAt + 16 * stepSec + 0.5;
+        status.textContent = "Playing generated pattern with basic Web Audio drums (" + qpm + " BPM).";
+      } catch (error) {
+        status.textContent = "Preview failed; see error below.";
+        result.textContent = String(error && error.stack || error);
       }
     });
 
