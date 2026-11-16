@@ -15,7 +15,7 @@ triple_buffer = { version = "=9.0.0", optional = true }
 [features]
 default = []
 # Enable CPAL / CoreAudio output in the interactive live CLI.
-live-audio = ["dep:cpal"]
+live-audio = ["dep:cpal", "dep:triple_buffer"]
 
 [[bin]]
 name = "live"
