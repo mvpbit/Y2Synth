@@ -337,3 +337,21 @@ cargo run --release --manifest-path experiments/drumsrnn/rust/Cargo.toml
 Затем в открытой странице `reference.html` обновить страницу, выбрать `From scratch` и `Temperature 1.0`, нажать `Generate pattern`, скопировать только 5 пар `[class, probability]` первого шага и сравнить с Rust CLI. Не требуется сохранять MIDI/JSON. При расхождении сначала анализировать LSTM bias/matmul, порядок строк и self-attention state. Совпадение топ-5 **само по себе не доказывает** полной численной корректности, но полезно для первичной диагностики.
 
 Source of model sequence and binary counter: [music_rnn/model.ts](https://github.com/magenta/magenta-js/blob/master/music/src/music_rnn/model.ts), [attention.ts](https://github.com/magenta/magenta-js/blob/master/music/src/music_rnn/attention.ts), [aux_inputs.ts](https://github.com/magenta/magenta-js/blob/master/music/src/core/aux_inputs.ts).
+
+## Эксперимент 11 — первый шаг Magenta.js, эталон для Rust (отчёт пользователя, 2026-11-17)
+
+**Условия:** From scratch, один беззвучный служебный стартовый шаг, 0 исходных MIDI-ударов, temperature=1.0, 16 генерируемых шагов. Сгенерировано 3 MIDI-удара: `(11,46),(15,42),(15,46)`. На Mac в браузере измерено: инициализация 14.0 ms, генерация 195.0 ms; средняя максимальная вероятность класса по 16 шагам 0.8311.
+
+**Первое предсказание: top-5 класс/вероятность (Magenta.js):**
+
+```text
+class 0:   0.954430
+class 4:   0.020489
+class 2:   0.007357
+class 1:   0.002394
+class 256: 0.002259
+```
+
+Это эталон для **первого** forward-step с пустым внутренним шагом на Rust. Результат ещё **не сравнен с Rust**, т.к. пользователь пока прислал только вывод браузера. Class 0 представляет отсутствие ударов, что согласуется с разреженным получившимся паттерном. Поскольку здесь temperature=1.0, температуры в softmax не должно быть дополнительного масштабирующего эффекта.
+
+**Следующее действие:** получить вывод `cargo test --manifest-path experiments/drumsrnn/rust/Cargo.toml` и `cargo run --release --manifest-path experiments/drumsrnn/rust/Cargo.toml`; сравнить Rust top-5 с приведённым. При совпадении top-5 всё равно необходимы точная проверка всех 512 вероятностей и дальнейших шагов с учётом float32/операций attention. JSON пользователь сохранять не хочет.
