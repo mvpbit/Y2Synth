@@ -4,8 +4,9 @@
 //! Y2Synth drum DSP. No samples, audio device, JS, or platform APIs are needed.
 //! Output: 44,100 Hz, mono, 16-bit PCM WAV, including a short decay tail.
 
-use crate::generation::{DrumHit, GeneratedPattern};
-use std::f32::consts::TAU;
+use crate::dsp::{render_hit, voice_duration};
+use crate::generation::GeneratedPattern;
+use crate::kit::DrumKit;
 use std::fs::File;
 use std::io::{self, BufWriter, ErrorKind, Write};
 use std::path::Path;
@@ -14,101 +15,6 @@ pub const SAMPLE_RATE: u32 = 44_100;
 
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(ErrorKind::InvalidInput, message.into())
-}
-
-fn voice_duration(pitch: u8) -> f32 {
-    match pitch {
-        36 => 0.36,                // kick
-        38 => 0.26,                // snare
-        42 => 0.12,                // closed hat
-        46 => 0.43,                // open hat
-        45 | 48 | 50 => 0.38,     // toms
-        49 => 0.90,                // crash
-        51 => 0.78,                // ride
-        _ => 0.18,
-    }
-}
-
-/// Simple deterministic noise source. Separate start-state per drum hit.
-fn noise_next(state: &mut u64) -> f32 {
-    *state = state.wrapping_add(0x9e3779b97f4a7c15);
-    let mut value = *state;
-    value = (value ^ (value >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-    value = (value ^ (value >> 27)).wrapping_mul(0x94d049bb133111eb);
-    let sample = (value ^ (value >> 31)) >> 40;
-    (sample as f32) * (2.0 / 16_777_216.0) - 1.0
-}
-
-fn render_voice(samples: &mut [f32], start: usize, hit: DrumHit, rate: u32) {
-    if start >= samples.len() {
-        return;
-    }
-    let sample_rate = rate as f32;
-    let length = ((voice_duration(hit.pitch) * sample_rate).ceil() as usize)
-        .min(samples.len() - start);
-
-    let mut phase = 0.0f32;
-    let mut previous_noise = 0.0f32;
-    let mut random_state =
-        0x8691_31e3_98b4_14a7u64 ^ ((hit.step as u64) << 16) ^ (hit.pitch as u64);
-
-    for index in 0..length {
-        let t = index as f32 / sample_rate;
-        let noise = noise_next(&mut random_state);
-        // Elementary differentiator makes noise brighter (not a high-fidelity filter).
-        let bright_noise = noise - 0.82 * previous_noise;
-        previous_noise = noise;
-
-        let (frequency, amplitude) = match hit.pitch {
-            36 => {
-                let frequency = 50.0 + 115.0 * (-t * 30.0).exp();
-                (frequency, 0.86 * (-t * 16.0).exp() * phase.sin())
-            }
-            38 => (
-                185.0,
-                0.29 * bright_noise * (-t * 20.0).exp()
-                    + 0.15 * phase.sin() * (-t * 24.0).exp(),
-            ),
-            42 => (
-                440.0,
-                0.24 * bright_noise * (-t * 54.0).exp(),
-            ),
-            46 => (
-                440.0,
-                0.24 * bright_noise * (-t * 13.0).exp(),
-            ),
-            45 | 48 | 50 => {
-                let base = match hit.pitch {
-                    45 => 120.0,
-                    48 => 155.0,
-                    _ => 198.0,
-                };
-                (
-                    base * (0.8 + 0.4 * (-t * 19.0).exp()),
-                    0.58 * phase.sin() * (-t * 14.0).exp(),
-                )
-            }
-            49 | 51 => {
-                let decay = if hit.pitch == 49 { 4.7 } else { 6.0 };
-                (
-                    603.0,
-                    (0.23 * bright_noise + 0.065 * (phase * 1.414).sin())
-                        * (-t * decay).exp(),
-                )
-            }
-            _ => (
-                440.0,
-                0.10 * bright_noise * (-t * 35.0).exp(),
-            ),
-        };
-        // Apply a short attack to prevent a hard discontinuity at the onset.
-        let attack = (t / 0.0015).min(1.0);
-        samples[start + index] += amplitude * attack;
-        phase += TAU * frequency / sample_rate;
-        if phase >= TAU {
-            phase -= TAU;
-        }
-    }
 }
 
 /// Produce a mono signal from the model's drum hits at the given BPM.
@@ -126,6 +32,18 @@ pub fn render_samples_at_rate(
     bpm: f32,
     sample_rate: u32,
 ) -> io::Result<Vec<f32>> {
+    render_samples_with_kit_at_rate(pattern, bpm, sample_rate, &DrumKit::default())
+}
+
+/// Render with explicit per-drum tone, level and decay settings.
+/// This function runs only on a control/offline thread, never in CoreAudio.
+pub fn render_samples_with_kit_at_rate(
+    pattern: &GeneratedPattern,
+    bpm: f32,
+    sample_rate: u32,
+    kit: &DrumKit,
+) -> io::Result<Vec<f32>> {
+    kit.validate()?;
     if !(8_000..=192_000).contains(&sample_rate) {
         return Err(invalid("Sample rate must be between 8000 and 192000 Hz"));
     }
@@ -136,7 +54,12 @@ pub fn render_samples_at_rate(
         return Err(invalid("Cannot render a zero-step pattern"));
     }
     let step_seconds = 60.0f64 / bpm as f64 / 4.0;
-    let length_seconds = step_seconds * pattern.classes.len() as f64 + 1.0;
+    // Leave enough space for edited long cymbal tails (decay up to 2x).
+    // Retain at least 1s tail to preserve the original WAV timing.
+    let longest_voice = pattern.hits.iter()
+        .filter_map(|hit| kit.voice(hit.pitch).map(|settings| voice_duration(hit.pitch, settings)))
+        .fold(1.0f32, f32::max);
+    let length_seconds = step_seconds * pattern.classes.len() as f64 + longest_voice as f64;
     let length = (length_seconds * sample_rate as f64).ceil() as usize;
     // Protect against accidentally attempting multi-gigabyte recordings.
     if length > (u32::MAX as usize / 2).saturating_sub(36) {
@@ -149,12 +72,14 @@ pub fn render_samples_at_rate(
             return Err(invalid("Drum hit outside pattern"));
         }
         let start = (hit.step as f64 * step_seconds * sample_rate as f64).round() as usize;
-        render_voice(&mut samples, start, hit, sample_rate);
+        let settings = kit.voice(hit.pitch).unwrap_or_default();
+        render_hit(&mut samples, start, hit, sample_rate, settings);
     }
 
     let peak = samples.iter().fold(0.0f32, |peak, sample| peak.max(sample.abs()));
-    // Normalize down or up to 80% of full scale, but preserve all-rest silence.
-    if peak > 0.0 {
+    // Limiter scales DOWN only. Normalizing quieter patterns UP would erase
+    // meaningful per-drum level changes and make "level 0.2" ineffective.
+    if peak > 0.8 {
         let gain = 0.8 / peak;
         for sample in &mut samples {
             *sample *= gain;
@@ -196,6 +121,7 @@ pub fn write_wav(path: &Path, pattern: &GeneratedPattern, bpm: f32) -> io::Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::generation::DrumHit;
     use std::fs;
 
     fn test_pattern(hits: Vec<DrumHit>) -> GeneratedPattern {
@@ -251,6 +177,54 @@ mod tests {
         assert!(render_samples(&test_pattern(vec![]), 0.0).is_err());
         assert!(render_samples(&test_pattern(vec![]), f32::NAN).is_err());
         assert!(render_samples(&test_pattern(vec![]), 500.0).is_err());
+    }
+
+    #[test]
+    fn quieter_kick_is_truly_quieter() {
+        let pattern = test_pattern(vec![DrumHit { step: 0, pitch: 36 }]);
+        let normal = render_samples_at_rate(&pattern, 120.0, 44_100).unwrap();
+        let mut kit = DrumKit::default();
+        kit.set(36, "level", 0.25).unwrap();
+        let quiet = render_samples_with_kit_at_rate(&pattern, 120.0, 44_100, &kit)
+            .unwrap();
+        let a = normal.iter().fold(0.0f32, |m, &x| m.max(x.abs()));
+        let b = quiet.iter().fold(0.0f32, |m, &x| m.max(x.abs()));
+        assert!(a > 0.1);
+        assert!(b > 0.0 && b < a * 0.6);
+    }
+
+    #[test]
+    fn muted_kick_produces_silence() {
+        let pattern = test_pattern(vec![DrumHit { step: 0, pitch: 36 }]);
+        let mut kit = DrumKit::default();
+        kit.set(36, "level", 0.0).unwrap();
+        let audio = render_samples_with_kit_at_rate(&pattern, 120.0, 48_000, &kit)
+            .unwrap();
+        assert!(audio.iter().all(|&x| x == 0.0));
+    }
+
+    #[test]
+    fn tone_control_changes_audio_but_not_rhythm_length() {
+        let pattern = test_pattern(vec![DrumHit { step: 4, pitch: 38 }]);
+        let mut kit = DrumKit::default();
+        let original = render_samples_with_kit_at_rate(&pattern, 120.0, 48_000, &kit)
+            .unwrap();
+        kit.set(38, "tone", 0.95).unwrap();
+        let changed = render_samples_with_kit_at_rate(&pattern, 120.0, 48_000, &kit)
+            .unwrap();
+        assert_eq!(original.len(), changed.len());
+        assert_ne!(original, changed);
+    }
+
+    #[test]
+    fn longer_cymbal_tail_is_retained() {
+        let pattern = test_pattern(vec![DrumHit { step: 15, pitch: 49 }]);
+        let mut kit = DrumKit::default();
+        kit.set(49, "decay", 2.0).unwrap();
+        let samples = render_samples_with_kit_at_rate(&pattern, 120.0, 44_100, &kit)
+            .unwrap();
+        // Two-second bar plus 2.3-second crash tail.
+        assert!(samples.len() > 4 * 44_100);
     }
 
     #[test]
