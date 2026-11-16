@@ -30,13 +30,13 @@ Y2Synth — экспериментальный музыкальный инстр
 Из корня репозитория:
 
 ```bash
-cargo test --locked --manifest-path experiments/drumsrnn/rust/Cargo.toml
+cargo test --manifest-path experiments/drumsrnn/rust/Cargo.toml
 cargo run --release --locked --manifest-path experiments/drumsrnn/rust/Cargo.toml --bin generate -- --steps 16 --temperature 1.2
 ```
 
 Полный прогон генератора требует предварительно скачанного checkpoint. `--argmax` используется для детерминированной сверки с браузерным Magenta.js, а не для прослушивания: на известном тесте он выдал 16 шагов тишины.
 
-**Не путай исходный файл с интегрированной функцией:** `src/sequencer.rs` уже существует в `main`, но пока **не экспортирован из `src/lib.rs`**, и нет CLI для live-проигрывания и звукового backend. Его тесты не запускаются как часть `cargo test`, пока модуль не подключён.
+**Статус интеграции:** `src/sequencer.rs` теперь экспортируется из `lib.rs`, добавлены `src/bin/live.rs` и feature-gated CPAL. Код **не прошёл** тесты и прослушивание на Mac. Перед дальнейшей разработкой выполните `cargo test --features live-audio`, `cargo run --features live-audio --bin live` и запишите результат. `Cargo.lock` нужно обновить после изменения зависимостей.
 
 ## Актуализация документации
 
