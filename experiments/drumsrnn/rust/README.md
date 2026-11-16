@@ -128,3 +128,44 @@ will contain silence; run the stochastic sampler again.
 
 **Validation status:** new WAV code and its 5 unit tests have been committed,
 but have **not yet been compiled or auditioned** on the user's Mac.
+
+## Live drum machine (new, Mac verification pending)
+
+An interactive experimental macOS output app has been added:
+- portable `src/sequencer.rs` prepares 16-step loops, switches a new buffer on the next bar, and fades transitions;
+- `src/bin/live.rs` opens the default output device with `cpal 0.18.2` (CoreAudio on macOS), sends precomputed mono samples to all output channels, and accepts commands from stdin;
+- model inference, pattern generation and loop rendering run on the CLI/control thread, never inside the audio callback.
+
+**Code status:** this is the first implementation and **has not yet been compiled, tested or auditioned on the user's Mac**. The `sequencer.rs` module is now exported from `lib.rs`, so its unit tests will run with ordinary `cargo test`; the live binary needs the opt-in feature `live-audio`.
+
+From the Y2Synth repository root:
+
+```bash
+git pull --ff-only
+
+# First build resolves CPAL and updates the existing Cargo.lock.
+# DO NOT use --locked until you have committed the updated lockfile.
+cargo test --manifest-path experiments/drumsrnn/rust/Cargo.toml \
+  --features live-audio
+
+cargo run --release --manifest-path experiments/drumsrnn/rust/Cargo.toml \
+  --features live-audio --bin live -- --bpm 120 --temperature 1.2
+```
+
+Then enter in the interactive terminal:
+
+```text
+play
+regenerate
+bpm 140
+stop
+play
+status
+quit
+```
+
+`play` starts a repeating 16-step loop, `stop` fades out, `bpm N` prepares the existing groove at a new tempo, and `regenerate` asks the AI for a completely new pattern *without user MIDI input*. New buffers are scheduled on a bar boundary when playback is running. There is no intermediate WAV file.
+
+After successful compilation and testing, commit the changed `experiments/drumsrnn/rust/Cargo.lock` to `main` (do **not** add downloaded model weights or WAV files). Then normal commands may again use `--locked`.
+
+**Real-time caveat:** `std::sync::mpsc` command polling and freeing old buffers in the audio callback may still involve internal locks or allocation/deallocation. This is an exploratory preview, not a formally RT-safe audio engine. Further hardening, device routing, xrun/latency benchmarks, and ARM/Y2Linux compatibility remain future work.
