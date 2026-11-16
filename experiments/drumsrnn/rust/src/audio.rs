@@ -39,11 +39,11 @@ fn noise_next(state: &mut u64) -> f32 {
     (sample as f32) * (2.0 / 16_777_216.0) - 1.0
 }
 
-fn render_voice(samples: &mut [f32], start: usize, hit: DrumHit) {
+fn render_voice(samples: &mut [f32], start: usize, hit: DrumHit, rate: u32) {
     if start >= samples.len() {
         return;
     }
-    let sample_rate = SAMPLE_RATE as f32;
+    let sample_rate = rate as f32;
     let length = ((voice_duration(hit.pitch) * sample_rate).ceil() as usize)
         .min(samples.len() - start);
 
@@ -116,6 +116,19 @@ fn render_voice(samples: &mut [f32], start: usize, hit: DrumHit) {
 /// Each model step is a sixteenth note (four steps per quarter note).
 /// The generated pattern is *not* modified, re-quantized, or regenerated.
 pub fn render_samples(pattern: &GeneratedPattern, bpm: f32) -> io::Result<Vec<f32>> {
+    render_samples_at_rate(pattern, bpm, SAMPLE_RATE)
+}
+
+/// Render in memory at the output device's sample rate for live playback.
+/// No WAV intermediate file is created.
+pub fn render_samples_at_rate(
+    pattern: &GeneratedPattern,
+    bpm: f32,
+    sample_rate: u32,
+) -> io::Result<Vec<f32>> {
+    if !(8_000..=192_000).contains(&sample_rate) {
+        return Err(invalid("Sample rate must be between 8000 and 192000 Hz"));
+    }
     if !bpm.is_finite() || !(40.0..=240.0).contains(&bpm) {
         return Err(invalid("BPM must be finite and in 40..=240"));
     }
@@ -124,7 +137,7 @@ pub fn render_samples(pattern: &GeneratedPattern, bpm: f32) -> io::Result<Vec<f3
     }
     let step_seconds = 60.0f64 / bpm as f64 / 4.0;
     let length_seconds = step_seconds * pattern.classes.len() as f64 + 1.0;
-    let length = (length_seconds * SAMPLE_RATE as f64).ceil() as usize;
+    let length = (length_seconds * sample_rate as f64).ceil() as usize;
     // Protect against accidentally attempting multi-gigabyte recordings.
     if length > (u32::MAX as usize / 2).saturating_sub(36) {
         return Err(invalid("Pattern too long for 16-bit RIFF/WAV"));
@@ -135,8 +148,8 @@ pub fn render_samples(pattern: &GeneratedPattern, bpm: f32) -> io::Result<Vec<f3
         if hit.step >= pattern.classes.len() {
             return Err(invalid("Drum hit outside pattern"));
         }
-        let start = (hit.step as f64 * step_seconds * SAMPLE_RATE as f64).round() as usize;
-        render_voice(&mut samples, start, hit);
+        let start = (hit.step as f64 * step_seconds * sample_rate as f64).round() as usize;
+        render_voice(&mut samples, start, hit, sample_rate);
     }
 
     let peak = samples.iter().fold(0.0f32, |peak, sample| peak.max(sample.abs()));
@@ -222,6 +235,15 @@ mod tests {
         assert!(audio[..SAMPLE_RATE as usize].iter().all(|sample| *sample == 0.0));
         assert!(audio[SAMPLE_RATE as usize..]
             .iter().any(|sample| sample.abs() > 0.05));
+    }
+
+    #[test]
+    fn device_sample_rate_controls_output_length() {
+        let pattern = test_pattern(vec![DrumHit { step: 0, pitch: 36 }]);
+        let audio = render_samples_at_rate(&pattern, 120.0, 48_000).unwrap();
+        assert_eq!(audio.len(), 144_000);
+        assert!(audio.iter().any(|value| value.abs() > 0.1));
+        assert!(render_samples_at_rate(&pattern, 120.0, 0).is_err());
     }
 
     #[test]
