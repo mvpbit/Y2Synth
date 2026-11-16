@@ -2,7 +2,7 @@ use std::env;
 use std::error::Error;
 use std::path::{Path, PathBuf};
 
-use y2synth_drumsrnn_weights::load_checkpoint;
+use y2synth_drumsrnn_weights::{load_checkpoint, lstm::BasicLstmCell};
 
 fn run() -> Result<(), Box<dyn Error>> {
     let mut args = env::args_os().skip(1);
@@ -55,7 +55,25 @@ fn run() -> Result<(), Box<dyn Error>> {
     }
 
     println!("OK: model weights decoded as finite little-endian float32.");
-    println!("Not implemented: LSTM, attention, pattern generation, audio, Y2 support.");
+
+    // Structural and numerical smoke test for each real pretrained LSTM layer.
+    // Zeros stand in for an input vector; this is NOT a valid full MusicRNN
+    // inference step because the attention-wrapper input is not constructed.
+    println!("BasicLSTMCell zero-input smoke checks (NOT rhythm generation):");
+    for layer in 0..3 {
+        let cell = BasicLstmCell::from_checkpoint(&model, layer)?;
+        let mut state = cell.zero_state();
+        let input = vec![0.0; cell.input_size()];
+        cell.step(&input, &mut state)?;
+        let preview = &state.hidden[..state.hidden.len().min(4)];
+        println!(
+            "  layer {layer}: input={}, hidden={}, first hidden values={preview:?}",
+            cell.input_size(),
+            cell.hidden_size()
+        );
+    }
+    println!("OK: 3 pretrained LSTM layers produced finite values for zero input.");
+    println!("Not implemented: attention, full DrumsRNN inference, pattern generation, audio, Y2 support.");
     Ok(())
 }
 
