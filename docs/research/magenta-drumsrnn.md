@@ -56,3 +56,36 @@ bash experiments/drumsrnn/download-model.sh
 Планируемый путь: `Application pattern -> AI worker -> candidate MIDI events -> validation -> Application -> DSP sequencer`. Модель генерирует **заранее**, а аудиопоток только воспроизводит подготовленные события. AI не входит в realtime callback; недоступность модели не должна останавливать синтезатор.
 
 **Вывод:** существует официальный конвертированный checkpoint той же pretrained DrumsRNN, пригодный для дальнейшего исследования. **Запуск на Innioasis Y2 пока не доказан**; его выполнимость зависит от конкретных весов, runtime, CPU/RAM и совместимости Y2Linux. Никакие прошивки или аппаратные изменения в ходе исследования не производились.
+
+
+## Эксперимент 1 — загрузка на Mac (2026-11-16)
+
+**Статус:** скачивание подтверждено выводом команды пользователя на Mac, анализ тензоров ещё не выполнен.
+
+```text
+config.json            237 bytes       SHA256 29da526d5830344bb6b9cbad6a506671fc01cf183fda353116bec0ba209fa041
+weights_manifest.json  1,758 bytes     SHA256 3f64e0300de500d59b74cb33d7c009dc6630491885d90dbaf93fa422e0798764
+group1-shard1of3       4,194,304 bytes SHA256 b822cab0c4913db6f0e6a69e33bd82f0a832a0e18e5d2e22d8a0f676b3c668f0
+group1-shard2of3       4,194,304 bytes SHA256 2e211975ea0d68b07c63faffd0e990bd9fb0f57c3260a1c32f19935826708c82
+group1-shard3of3       3,482,792 bytes SHA256 024cd22e7f0ed9777599027b399ce330607c920c4e22057586f3a9b2f5706ee9
+```
+
+**Всего бинарных весов:** 11,871,400 bytes (11.32 MiB). Эти SHA-256 — измерения локальных файлов, **не подтверждённые производителем эталонные значения**. `curl` завершился без ошибки, но сами тензоры пока не исследованы.
+
+### Эксперимент 2 — разбор весов без TensorFlow
+
+Добавлен `experiments/drumsrnn/inspect_checkpoint.py` на стандартной библиотеке Python. Для запуска **из корня локального репозитория**:
+
+```bash
+git pull --ff-only
+python3 experiments/drumsrnn/inspect_checkpoint.py
+```
+
+Программа выведет `config.json`, имена, типы и формы тензоров из манифеста, суммарное число элементов, SHA-256 shard-файлов и сравнит размеры с ожидаемыми по dtype/shape. **Скрипт не выполняет inference, не сверяет численные значения и не подтверждает происхождение весов**; если размер не совпадает, завершится с ошибкой.
+
+После получения вывода: сопоставить формы ядер LSTM и attention с исходниками `music_rnn/model.ts`, оценить стоимость inference и только после этого выбрать вариант Rust runtime.
+
+Источники для структуры файлов и модели:
+- [Magenta.js — pre-trained checkpoints](https://github.com/magenta/magenta-js/blob/master/music/checkpoints/README.md)
+- [Magenta.js MusicRNN implementation](https://github.com/magenta/magenta-js/blob/master/music/src/music_rnn/model.ts)
+- [TensorFlow.js weight manifest writer](https://github.com/tensorflow/tfjs/blob/master/tfjs-converter/python/tensorflowjs/write_weights.py)
