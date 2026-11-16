@@ -5,25 +5,29 @@
 //! Playback state is an atomic flag. The callback does not own or destroy
 //! audio buffers. This remains a prototype pending xrun/latency profiling.
 
+use std::cell::Cell;
 use std::env;
 use std::error::Error;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use triple_buffer::triple_buffer;
+use triple_buffer::{triple_buffer, Input};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, Sample, SampleFormat, SizedSample, Stream, StreamConfig};
 
 use y2synth_drumsrnn_weights::{
+    application::{AppResponse, ApplicationController, AudioPort, DrumGenerator},
     attention::AttentionRnn,
     generation::{generate, GeneratedPattern, Sampling, DRUM_PITCHES},
     kit::{pitch_by_name, DrumKit, VOICE_NAMES},
     load_checkpoint,
+    project::TrackId,
     realtime::RealtimePlayer,
-    sequencer::{prepare_loop_with_kit, PreparedLoop},
+    sequencer::PreparedLoop,
+    ui::{Command as MenuCommand, InputEvent, MenuController, Screen},
 };
 
 struct Options {
@@ -46,6 +50,8 @@ fn usage() {
     println!("  play | stop | bpm <40..240> | regenerate | status | quit");
     println!("  kit | level <voice> <0..1.5> | tone <voice> <0..1>");
     println!("  decay <voice> <0.5..2> | reset-kit");
+    println!("  menu | center | next | prev | back | wheel-play");
+    println!("  (menu commands simulate the Y2 wheel; 'play' works anywhere)");
     println!("Voices: kick snare chh ohh lowtom midtom hightom crash ride");
 }
 
@@ -128,20 +134,6 @@ where
     Ok(stream)
 }
 
-fn next_pattern(
-    network: &AttentionRnn<'_>,
-    seed: u64,
-    temperature: f32,
-    bpm: f32,
-    sample_rate: u32,
-    kit: &DrumKit,
-) -> Result<(GeneratedPattern, PreparedLoop), Box<dyn Error>> {
-    // Always start from scratch: no user-supplied MIDI primer.
-    let pattern = generate(network, 16, Sampling::Temperature(temperature), seed)?;
-    let buffer = prepare_loop_with_kit(&pattern, bpm, sample_rate, kit)?;
-    Ok((pattern, buffer))
-}
-
 fn show_pattern(pattern: &GeneratedPattern, seed: u64) {
     println!("AI seed: {seed}; drum hits: {}", pattern.hits.len());
     for (bit, pitch) in DRUM_PITCHES.iter().enumerate() {
@@ -165,6 +157,73 @@ fn show_kit(kit: &DrumKit) {
     }
 }
 
+/// Backend adapter: only the CONTROL thread uses this. The CoreAudio
+/// callback continues to own the Output half of the triple buffer.
+struct LiveAudio<'a> {
+    input: &'a mut Input<PreparedLoop>,
+    playing: &'a Arc<AtomicBool>,
+}
+
+impl AudioPort for LiveAudio<'_> {
+    fn queue_bar(&mut self, bar: PreparedLoop) -> io::Result<()> {
+        self.input.write(bar);
+        Ok(())
+    }
+
+    fn start(&mut self) -> io::Result<()> {
+        self.playing.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+fn apply_command<G: DrumGenerator>(
+    app: &mut ApplicationController,
+    command: MenuCommand,
+    generator: &mut G,
+    input: &mut Input<PreparedLoop>,
+    playing: &Arc<AtomicBool>,
+) -> io::Result<AppResponse> {
+    let mut audio = LiveAudio { input, playing };
+    app.dispatch(command, generator, &mut audio)
+}
+
+fn describe_result(result: AppResponse) {
+    match result {
+        AppResponse::PlayingLast { mode, bpm } => {
+            println!("PLAY: saved project ({mode:?}), tempo {bpm} BPM.");
+        }
+        AppResponse::DrumGenerated { hits } => {
+            println!("AI: {hits} drum hits; new loop queued and saved in RAM.");
+        }
+        AppResponse::EditDrums => {
+            println!("Drums editor: kit | level kick 0.5 | tone snare 0.8 | decay chh 1.5");
+        }
+        AppResponse::NotImplemented(feature) => println!("Not available yet: {feature}"),
+        AppResponse::NothingSaved => println!("No saved drum project to play."),
+    }
+}
+
+fn show_menu(menu: &MenuController) {
+    match menu.screen() {
+        Screen::Home => println!("MENU: PLAY (wheel-play to play last, center to enter settings)"),
+        Screen::PlaySettings => println!(
+            "MENU: PLAY SETTINGS [USER / AI] — selected {:?} (next/prev, center, back)",
+            menu.mode_focus(),
+        ),
+        Screen::UserPage(track) => println!(
+            "MENU: USER / {track:?} (next/prev track, center to edit, back)"
+        ),
+        Screen::AiMenu => println!(
+            "MENU: AI / {:?} (next/prev, center to select, back)",
+            menu.ai_focus(),
+        ),
+        Screen::AiTrackSelect => println!(
+            "MENU: AI / GENERATE TRACK / {:?} (next/prev, center to generate, back)",
+            menu.track_focus(),
+        ),
+    }
+}
+
 fn run() -> Result<(), Box<dyn Error>> {
     let Some(options) = parse_options()? else { return Ok(()); };
 
@@ -180,25 +239,20 @@ fn run() -> Result<(), Box<dyn Error>> {
         return Err("Default audio output has zero channels".into());
     }
 
-    println!("Y2Synth / live AI drum experiment");
+    println!("Y2Synth / live AI drum experiment + menu coordinator");
     println!("Output: {sample_rate} Hz, {channels} channels, {sample_format:?}");
     println!("Loading Magenta DrumsRNN checkpoint…");
     let checkpoint = load_checkpoint(&options.weights)?;
     let network = AttentionRnn::from_checkpoint(&checkpoint)?;
-    let mut bpm = options.bpm;
-    let mut seed = options.seed;
-    let mut kit = DrumKit::default();
-    let mut current_pattern = next_pattern(
-        &network, seed, options.temperature, bpm, sample_rate, &kit,
+    let initial_pattern = generate(
+        &network, 16, Sampling::Temperature(options.temperature), options.seed,
     )?;
-    show_pattern(&current_pattern.0, seed);
+    show_pattern(&initial_pattern, options.seed);
 
-    // Two spare triple-buffer slots are owned by the control thread and one
-    // by audio. Producer overwrites/deallocates old loops only on this thread.
+    // The triple buffer and real-time callback are unchanged. Application
+    // commands publish finished loops from this control/CLI thread only.
     let initial = PreparedLoop {
-        samples: vec![],
-        bpm,
-        sample_rate,
+        samples: vec![], bpm: options.bpm, sample_rate,
     };
     let (mut input, output) = triple_buffer(&initial);
     let playing = Arc::new(AtomicBool::new(false));
@@ -212,79 +266,97 @@ fn run() -> Result<(), Box<dyn Error>> {
         SampleFormat::F64 => build_stream::<f64>(&device, config, player)?,
         other => return Err(format!("Unsupported default audio sample format: {other:?}").into()),
     };
-    // Publish first pattern before the CoreAudio callback starts.
-    input.write(current_pattern.1);
-    stream.play()?;
+
+    let mut app = ApplicationController::new(sample_rate, options.bpm)?;
+    {
+        let mut audio = LiveAudio { input: &mut input, playing: &playing };
+        app.install_initial_drums(initial_pattern, DrumKit::default(), &mut audio)?;
+    }
+    stream.play()?; // Audio stream runs, transport remains stopped until PLAY.
+
+    let seed = Cell::new(options.seed);
+    let mut drum_generator = || {
+        let next_seed = seed.get().wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let pattern = generate(
+            &network, 16, Sampling::Temperature(options.temperature), next_seed,
+        )?;
+        seed.set(next_seed);
+        Ok(pattern)
+    };
+    let mut menu = MenuController::default();
 
     println!();
-    println!("Ready. Enter: play | stop | bpm <40..240> | regenerate | kit | help | quit");
-    println!("AI inference and synth rendering run on this control thread, not the audio callback.");
+    println!("Ready. Enter: play | stop | regenerate | bpm 120 | kit | menu | help | quit");
+    println!("Wheel simulation: center | next | prev | back | wheel-play");
+    println!("New AI loops and user kit edits are saved in RAM, not to disk.");
     let stdin = io::stdin();
     let mut lines = stdin.lock();
     loop {
         print!("y2> ");
         io::stdout().flush()?;
         let mut line = String::new();
-        if lines.read_line(&mut line)? == 0 {
-            break;
-        }
+        if lines.read_line(&mut line)? == 0 { break; }
         let words: Vec<_> = line.split_whitespace().collect();
         if words.is_empty() { continue; }
+
         match words.as_slice() {
             ["play"] => {
-                playing.store(true, Ordering::Relaxed);
-                println!("Playing (loop on).");
+                let result = apply_command(
+                    &mut app, MenuCommand::PlayLast, &mut drum_generator,
+                    &mut input, &playing,
+                )?;
+                describe_result(result);
             }
             ["stop"] => {
                 playing.store(false, Ordering::Relaxed);
                 println!("Stopping with short fade.");
             }
             ["regenerate"] => {
-                seed = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
-                let (pattern, buffer) =
-                    next_pattern(&network, seed, options.temperature, bpm, sample_rate, &kit)?;
-                input.write(buffer);
-                println!("New AI-generated pattern published for next bar (or immediately if stopped).");
-                show_pattern(&pattern, seed);
-                current_pattern.0 = pattern;
-            }
-            ["bpm", raw] => {
-                match raw.parse::<f32>().ok().and_then(|value| {
-                    validate_bpm(value).ok().map(|_| value)
-                }) {
-                    Some(next_bpm) => {
-                        let buffer = prepare_loop_with_kit(
-                            &current_pattern.0, next_bpm, sample_rate, &kit
-                        )?;
-                        input.write(buffer);
-                        bpm = next_bpm;
-                        println!("Tempo {bpm} BPM queued for next bar (or immediately if stopped).");
-                    }
-                    None => println!("Invalid BPM. Enter a number from 40 to 240."),
+                let result = apply_command(
+                    &mut app, MenuCommand::GenerateTrack(TrackId::Drums),
+                    &mut drum_generator, &mut input, &playing,
+                )?;
+                describe_result(result);
+                if let Some(drums) = app.session().current().drums() {
+                    show_pattern(&drums.content.pattern, seed.get());
                 }
             }
-            ["kit"] => show_kit(&kit),
+            ["bpm", raw] => match raw.parse::<f32>().ok()
+                .and_then(|value| validate_bpm(value).ok().map(|_| value))
+            {
+                Some(bpm) => {
+                    let mut audio = LiveAudio { input: &mut input, playing: &playing };
+                    app.set_bpm(bpm, &mut audio)?;
+                    println!("Tempo {bpm} BPM queued for next bar and saved in RAM.");
+                }
+                None => println!("Invalid BPM. Enter a number from 40 to 240."),
+            },
+            ["kit"] => {
+                if let Some(drums) = app.session().current().drums() {
+                    show_kit(&drums.content.kit);
+                } else {
+                    println!("No drum kit loaded.");
+                }
+            }
             ["reset-kit"] => {
-                kit.reset();
-                let buffer = prepare_loop_with_kit(
-                    &current_pattern.0, bpm, sample_rate, &kit
-                )?;
-                input.write(buffer);
-                println!("Kit restored to defaults; update scheduled at the next bar.");
+                let mut audio = LiveAudio { input: &mut input, playing: &playing };
+                if app.set_drum_kit(DrumKit::default(), &mut audio)? {
+                    println!("Kit reset and saved in RAM; update queued for the next bar.");
+                }
             }
             ["level", name, raw] | ["tone", name, raw] | ["decay", name, raw] => {
                 let parameter = words[0];
+                let existing = app.session().current().drums()
+                    .map(|drums| drums.content.kit).unwrap_or_default();
                 match (pitch_by_name(name), raw.parse::<f32>()) {
                     (Some(pitch), Ok(value)) => {
-                        match kit.set(pitch, parameter, value) {
+                        let mut updated = existing;
+                        match updated.set(pitch, parameter, value) {
                             Ok(()) => {
-                                let buffer = prepare_loop_with_kit(
-                                    &current_pattern.0, bpm, sample_rate, &kit,
-                                )?;
-                                input.write(buffer);
-                                println!(
-                                    "{parameter} {name} = {value:.2} (next bar or immediately while stopped)"
-                                );
+                                let mut audio = LiveAudio { input: &mut input, playing: &playing };
+                                if app.set_drum_kit(updated, &mut audio)? {
+                                    println!("{parameter} {name} = {value:.2} (queued, saved in RAM)");
+                                }
                             }
                             Err(error) => println!("Invalid {parameter}: {error}"),
                         }
@@ -292,19 +364,46 @@ fn run() -> Result<(), Box<dyn Error>> {
                     _ => println!("Invalid voice or value; enter 'help' for syntax."),
                 }
             }
-            ["status"] => println!(
-                "Requested pattern: {} hits, {bpm} BPM, temperature {}, last seed {seed}.",
-                current_pattern.0.hits.len(), options.temperature
-            ),
+            ["menu"] => show_menu(&menu),
+            ["center"] | ["next"] | ["prev"] | ["back"] | ["wheel-play"] => {
+                let event = match words[0] {
+                    "center" => InputEvent::CenterPressed,
+                    "next" => InputEvent::Next,
+                    "prev" => InputEvent::Previous,
+                    "back" => InputEvent::BackPressed,
+                    _ => InputEvent::PlayPressed,
+                };
+                if let Some(command) = menu.handle(event) {
+                    let result = apply_command(
+                        &mut app, command, &mut drum_generator, &mut input, &playing,
+                    )?;
+                    describe_result(result);
+                    if let AppResponse::DrumGenerated { .. } = result {
+                        if let Some(drums) = app.session().current().drums() {
+                            show_pattern(&drums.content.pattern, seed.get());
+                        }
+                    }
+                }
+                show_menu(&menu);
+            }
+            ["status"] => {
+                let current = app.session().current();
+                let hits = current.drums()
+                    .map(|drums| drums.content.pattern.hits.len()).unwrap_or(0);
+                println!(
+                    "Saved project: {} drum hits, {} BPM, mode {:?}, temperature {}, seed {}.",
+                    hits, current.bpm(), current.mode(), options.temperature, seed.get(),
+                );
+                show_menu(&menu);
+            }
             ["quit"] | ["exit"] => break,
             ["help"] => usage(),
-            _ => println!("Unknown command. Try 'help' for available drum controls."),
+            _ => println!("Unknown command. Try 'help'."),
         }
     }
-    // Stream shutdown happens on the CLI thread. No WAV file is created.
     playing.store(false, Ordering::Relaxed);
     drop(stream);
-    println!("Bye.");
+    println!("Bye. Saved snapshot was RAM-only; quitting clears it.");
     Ok(())
 }
 
