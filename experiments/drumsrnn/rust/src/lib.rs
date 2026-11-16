@@ -2,6 +2,7 @@
 //! The crate now includes a standalone BasicLSTMCell step, but not attention or music generation.
 
 pub mod lstm;
+pub mod attention;
 
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashSet};
