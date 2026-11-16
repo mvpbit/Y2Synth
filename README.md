@@ -8,7 +8,7 @@
 
 - **Работает на Mac:** загрузка весов Magenta DrumsRNN, собственный Rust-инференс (3 LSTM + attention), автономная генерация 16 шагов и тестовый WAV-рендерер барабанов. Пользователь подтвердил прослушивание WAV.
 - **Частично проверено численно:** 16 классов при Argmax в Rust и Magenta.js совпадают; top-5 вероятности на шагах 0/1/7/15 различаются около 10⁻⁶. Это не полная проверка 512 вероятностей на каждом шаге.
-- **В процессе:** `src/sequencer.rs` — исходник будущего live-секвенсора, но модуль **ещё не подключён к сборке и не протестирован**. Непосредственный аудиовывод из Rust и интерактивный live CLI ещё отсутствуют.
+- **В коде, ожидает проверки на Mac:** `src/sequencer.rs` подключён к крейту, добавлены тесты тактов/переходов и интерактивный `bin/live.rs` с CPAL (CoreAudio) для `play`, `stop`, `bpm`, `regenerate`, `quit`. Сборка и живое прослушивание нового CLI пока **не подтверждены**. Аудио продолжает идти из предварительно рассчитанного буфера, модель не работает в audio callback.
 - **Не реализованы:** два синтезатора, финальный интерфейс, прошивка Y2 и production audio.
 
 Модель генерирует барабаны **без ритма, заранее введённого пользователем**. Внутренний служебный тихий начальный шаг не является пользовательским паттерном.
@@ -19,13 +19,13 @@
 
 ```bash
 bash experiments/drumsrnn/download-model.sh
-cargo test --locked --manifest-path experiments/drumsrnn/rust/Cargo.toml
+cargo test --manifest-path experiments/drumsrnn/rust/Cargo.toml
 ```
 
 Сгенерировать и прослушать ритм (из корня репозитория):
 
 ```bash
-cargo run --release --locked \
+cargo run --release \
   --manifest-path experiments/drumsrnn/rust/Cargo.toml \
   --bin generate -- --steps 16 --temperature 1.2 \
   --wav /tmp/y2synth-groove.wav --bpm 120
@@ -33,7 +33,16 @@ cargo run --release --locked \
 afplay /tmp/y2synth-groove.wav
 ```
 
-Это **офлайн WAV-просмотр**, а не live-воспроизведение. Тестовый синтез ударных не является финальным звуком инструмента.
+Это офлайн WAV-просмотр. Для интерактивного live-прототипа на macOS:
+
+```bash
+cargo run --release --manifest-path experiments/drumsrnn/rust/Cargo.toml \
+  --features live-audio --bin live -- --bpm 120 --temperature 1.2
+```
+
+В появившейся консоли: `play`, `stop`, `bpm 140`, `regenerate`, `status`, `quit`. Это **ещё не проверенный сборкой и прослушиванием прототип**, не готовый инструмент. Генерация AI и подготовка буфера выполняются вне аудиопотока; смена запланирована на границе такта. При смене ритма в callback пока возможны операции освобождения буфера — real-time hardening впереди.
+
+**Важно про зависимости:** добавлен необязательный CPAL 0.18.2; `Cargo.lock` в Git пока не обновлён. Первый `cargo test` или `cargo run` без `--locked` пересоздаст lockfile. После успешной сборки нужно сохранить обновлённый `experiments/drumsrnn/rust/Cargo.lock` в `main`. Веса модели и аудиофайлы в Git не добавлять.
 
 ## Документация
 
