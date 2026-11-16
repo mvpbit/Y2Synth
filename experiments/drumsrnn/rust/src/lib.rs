@@ -6,6 +6,7 @@ pub mod lstm;
 pub mod attention;
 pub mod generation;
 pub mod audio;
+pub mod sequencer;
 
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashSet};
