@@ -89,3 +89,39 @@ python3 experiments/drumsrnn/inspect_checkpoint.py
 - [Magenta.js — pre-trained checkpoints](https://github.com/magenta/magenta-js/blob/master/music/checkpoints/README.md)
 - [Magenta.js MusicRNN implementation](https://github.com/magenta/magenta-js/blob/master/music/src/music_rnn/model.ts)
 - [TensorFlow.js weight manifest writer](https://github.com/tensorflow/tfjs/blob/master/tfjs-converter/python/tensorflowjs/write_weights.py)
+
+
+## Эксперимент 2 — проверка манифеста на Mac (2026-11-16)
+
+**Статус: выполнено на Mac, по выводу скрипта пользователя.** Контрольным хешам бинарников соответствуют те же файлы, которые были скачаны на предыдущем шаге.
+
+- `config.json`: `MusicRNN`, `DrumsOneHotConverter`, `BinaryCounter(numBits=6)`, `attentionLength=32`.
+- 16 тензоров в 1 группе, только `float32`.
+- 2,967,850 числовых элементов × 4 байта = **11,871,400 байт** (11.32 MiB).
+- Три LSTM-слоя: ядра `[774, 1024]`, `[512, 1024]`, `[512, 1024]`; bias каждого слоя `[1024]`. Четыре gate-вектора по 256 значений на слой.
+- Выходное отображение: `fully_connected/weights [256,512]`, bias `[512]`.
+- Веса attention присутствуют, длина памяти 32 шага.
+- Проверка `manifest expected bytes == sum(shard file bytes)`: **OK**.
+
+**Вывод:** размеры и структура скачанных checkpoint файлов согласованы. Их численная корректность, реальное исполнение inference и производительность на Y2 **не проверены**. Размер весов не равен пиковому расходу RAM в приложении.
+
+### Эксперимент 3 — эталонный inference в браузере на Mac
+
+Добавлен `experiments/drumsrnn/reference.html` (пока **не протестирован в браузере**): оригинальная `@magenta/music@1.23.1` загружается с CDN; модель **читает уже скачанные локальные веса** с простого HTTP-сервера и продолжает фиксированный 16-шаговый барабанный паттерн ещё на 16 шагов. Sampling **argmax** (без случайности); экспортирует JSON, включая распределения вероятностей 16×512, длительность загрузки и генерации.
+
+В **корне Y2Synth** на Mac:
+
+```bash
+git pull --ff-only
+python3 -m http.server 8765 --bind 127.0.0.1
+```
+
+Затем открыть:
+
+```text
+http://127.0.0.1:8765/experiments/drumsrnn/reference.html
+```
+
+Нажать **Generate reference**, затем **Save JSON**. Записать версии браузера и macOS, вывод, время генерации и ошибки, если возникнут. Файл JSON по умолчанию окажется в папке загрузок браузера; в Git его не добавлять, пока мы не решим, какие данные действительно нужны для тестов. Для работы требуется Интернет **для JS-библиотеки с CDN**, но **не для весов**. Тесты браузера не отражают время выполнения на слабом ARM CPU и не подтверждают совместимость с Y2Linux.
+
+Основной API: [MusicRNN.continueSequenceAndReturnProbabilities](https://magenta.github.io/magenta-js/music/classes/_music_rnn_model_.musicrnn.html); [исходный код](https://github.com/magenta/magenta-js/blob/master/music/src/music_rnn/model.ts). 
