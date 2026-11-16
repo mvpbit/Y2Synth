@@ -263,7 +263,7 @@ mod tests {
         let mut audio = TestAudio::default();
         app.install_initial_drums(pattern(36), DrumKit::default(), &mut audio).unwrap();
         let mut calls = 0usize;
-        let mut generator = || {
+        let mut generator = || -> io::Result<GeneratedPattern> {
             calls += 1;
             Ok(pattern(38))
         };
@@ -302,10 +302,12 @@ mod tests {
         let mut app = ApplicationController::new(8_000, 120.0).unwrap();
         let mut audio = TestAudio::default();
         app.install_initial_drums(pattern(36), DrumKit::default(), &mut audio).unwrap();
-        let mut failed = || Err(io::Error::new(io::ErrorKind::Other, "generation failed"));
+        let mut failed = || -> io::Result<GeneratedPattern> {
+            Err(io::Error::new(io::ErrorKind::Other, "generation failed"))
+        };
         assert!(app.dispatch(Command::GenerateTrack(TrackId::Drums), &mut failed, &mut audio).is_err());
         audio.reject_queue = true;
-        let mut succeeding = || Ok(pattern(38));
+        let mut succeeding = || -> io::Result<GeneratedPattern> { Ok(pattern(38)) };
         assert!(app.dispatch(Command::GenerateTrack(TrackId::Drums), &mut succeeding, &mut audio).is_err());
         assert_eq!(app.session().last_saved().unwrap().drums().unwrap().content.pattern.hits[0].pitch, 36);
     }
@@ -348,7 +350,7 @@ mod tests {
         let mut audio = TestAudio::default();
         app.install_initial_drums(pattern(36), DrumKit::default(), &mut audio).unwrap();
         let mut calls = 0usize;
-        let mut generator = || {
+        let mut generator = || -> io::Result<GeneratedPattern> {
             calls += 1;
             Ok(pattern(42))
         };
