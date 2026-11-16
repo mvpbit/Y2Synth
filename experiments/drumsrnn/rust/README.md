@@ -1,6 +1,6 @@
-# DrumsRNN Rust checkpoint loader (experiment)
+# DrumsRNN Rust autonomous generator (experiment)
 
-This crate contains an **offline weight loader**, TensorFlow **BasicLSTMCell**, and an **experimental Magenta.js attention-wrapper forward step** producing 512-class logits. It is **not yet an autonomous music generator** or Y2 firmware image.
+This crate contains an offline Magenta.js checkpoint loader, a native Rust three-layer LSTM/attention inference engine, an **autonomous drum-pattern generator**, and a minimal PCM16 WAV preview renderer. It is **not** Y2 firmware or a production drum synthesizer.
 
 The weights must already exist from the repository's `experiments/drumsrnn/download-model.sh`.
 The loader reads `config.json`, `weights_manifest.json`, and all referenced binary
@@ -27,10 +27,7 @@ Expected for the checkpoint already inspected on Mac:
 - 11,871,400 decoded weight bytes (11.32 MiB)
 - attention length 32
 
-**Not yet implemented:** multi-step autonomous class sampling and MIDI decoding, sample synthesis, runtime performance benchmarks, cross-compilation,
-and running on Innioasis Y2. Loading and decoding all weights consumes more RAM than
-the binary file size; the implementation minimizes temporary shard buffers but makes
-no claim about embedded memory suitability yet.
+**Still not implemented:** production drum DSP, real-time audio output, controlled runtime benchmarks, cross-compilation, or running on Innioasis Y2. The WAV renderer is a simple preview, not the final instrument. Loading and decoding all weights uses RAM; embedded suitability has not been established.
 
 The checkpoint-loader tests and LSTM tests use synthetic small matrices; do not mistake a passing unit test for proof of full neural network equivalence. `cargo run --release` loads the real checkpoint and runs **one step per pretrained LSTM layer with a synthetic zero input vector**, which validates finite computations and compatible dimensions, **not a real generated drum event**. Next we need to build the attention wrapper and compare full inference against Magenta.js.
 
@@ -51,16 +48,9 @@ The saved `attention/bias` tensor is loaded and checked but **not applied**
 to the attention query, because the original Magenta.js `attention.ts` only
 uses `tf.matMul(attnQuery, attnMatrix)` there.
 
-The CLI now runs **one forward step** with the internally silent class `0` at
-step `0`, and prints the five most probable next drum-event classes. These
-values are **not yet verified against Magenta.js**, and this is **not** a
-generated drum pattern.
+The checkpoint-inspection CLI runs a first forward step after a silent bootstrap and prints the top-five next-class probabilities. **These five probabilities matched Magenta.js to six decimals.** The independent `--bin generate` program additionally makes complete autonomous patterns.
 
-To compare without exporting JSON, the local `reference.html` page displays
-`First generated step — top 5 classes` at temperature **1.0** in `From scratch`
-mode. Compare IDs and approximate probabilities (floating-point kernels will
-not necessarily be bit-identical). The first step's probabilities do not depend
-on later random sampling.
+For numerical comparison without exporting JSON, open `reference.html` in **From scratch + Argmax** mode. Both CLI and page display top-five class probabilities on steps 0, 1, 7, 15. The first-step probabilities are independent of later random sampling.
 
 Run:
 
@@ -70,9 +60,7 @@ cargo test --manifest-path experiments/drumsrnn/rust/Cargo.toml
 cargo run --release --manifest-path experiments/drumsrnn/rust/Cargo.toml
 ```
 
-**Not yet verified on Mac:** compilation/tests of the newly added attention
-module and output comparison with Magenta.js. Earlier 10 Rust tests and the
-pretrained LSTM zero-input smoke checks passed.
+**Verified on Mac:** the previous 14 tests passed; release loading and three LSTM + attention computations succeeded. Both implementations chose 16 silent classes under Argmax, and the top-five probabilities at steps 0, 1, 7, 15 matched to approximately 1e-6. This is strong evidence of correct multi-step behavior, not a comparison of every one of the 512 probabilities per step.
 
 ## Autonomous generation CLI (experimental)
 
@@ -108,13 +96,35 @@ the most probable class, and `--seed` provides repeatability for Rust.
 The Rust sampling RNG is **not identical** to TensorFlow.js's RNG, so
 temperature sampling is not expected to match the browser event-for-event.
 
-**Validation status:** Rust loader/LSTM/first attention-step passed all 14
-existing tests and matched the first-step Magenta.js top five probabilities
-to six decimals. **Generation module and CLI have now been compiled and run on Mac:** a 16-step, 9-hit pattern was generated in **40.2 ms** at temperature 1.2 (one uncontrolled timing sample). **Multi-step probabilities have not yet been compared with the browser.** Do not interpret a successful
-build as proof of multi-step numerical equivalence. Compare browser
-`reference.html` in *From scratch / Argmax* mode: it now prints
-sampled class IDs and top five probabilities at steps 0, 1, 7, and 15.
-No JSON file is needed.
+**Validation status:** Rust loaded the checkpoint and created a 16-step, 9-hit pattern in **40.2 ms** at temperature 1.2 in one Mac test run. Under Argmax, Rust and Magenta.js chose the same 16 classes (all silent), with top-five probabilities matching to around 1e-6 on steps 0, 1, 7, 15. This does not establish full numerical equivalence or hardware performance on Y2.
 
-Audio rendering, model speed on 32-bit ARM, full model equality and
-Y2 firmware integration remain out of scope.
+Model speed on 32-bit ARM, full 512-class numerical equality across all steps, production audio, and Y2 firmware integration remain out of scope.
+
+## Listen to a pattern generated entirely on Rust (new, untested on Mac)
+
+`src/audio.rs` adds a **dependency-free, synthesized WAV preview**.
+It turns the existing MIDI-like events into basic kick/snare/hi-hat/tom/cymbal
+voices using standard-library math and writes a 44.1 kHz, mono, 16-bit PCM WAV.
+This is only for hearing the generated timing, not production DSP.
+
+From the Y2Synth repo root on macOS:
+
+```bash
+git pull --ff-only
+cargo test --manifest-path experiments/drumsrnn/rust/Cargo.toml
+
+cargo run --release --manifest-path experiments/drumsrnn/rust/Cargo.toml \
+  --bin generate -- --steps 16 --temperature 1.2 \
+  --wav /tmp/y2synth-groove.wav --bpm 120
+
+afplay /tmp/y2synth-groove.wav
+```
+
+No browser, TensorFlow.js, or JSON is involved. The `--wav` argument is
+optional, so the original text-only CLI remains unchanged by default.
+`--bpm` accepts 40–240 and defaults to 120. Use `--seed` to replay a
+specific Rust-generated rhythm. If a sampled pattern has zero hits, the WAV
+will contain silence; run the stochastic sampler again.
+
+**Validation status:** new WAV code and its 5 unit tests have been committed,
+but have **not yet been compiled or auditioned** on the user's Mac.
