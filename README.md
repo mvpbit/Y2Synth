@@ -48,6 +48,7 @@ cargo run --release --manifest-path experiments/drumsrnn/rust/Cargo.toml \
 
 - [PROJECT](docs/PROJECT.md) — идея, цели, границы и открытые вопросы.
 - [ARCHITECTURE](docs/ARCHITECTURE.md) — компоненты, аудиотракт и планируемые границы.
+- [UI MENU](docs/UI_MENU.md) — предварительная иерархия PLAY → USER/AI и управление генерацией дорожек.
 - [ROADMAP](docs/ROADMAP.md) — проверенные этапы и дальнейшая разработка.
 - [DEVELOPMENT](docs/DEVELOPMENT.md) — текущее состояние, команды и точка продолжения для новых чатов.
 - [AGENTS](AGENTS.md) — правила для AI-агентов и разработчиков.
