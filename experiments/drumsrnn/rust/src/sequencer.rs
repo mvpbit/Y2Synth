@@ -7,8 +7,9 @@
 //! The real-time state machine lives in `realtime.rs`. This module is
 //! intentionally offline/control-thread-only: it may allocate Vecs.
 
-use crate::audio::render_samples_at_rate;
+use crate::audio::render_samples_with_kit_at_rate;
 use crate::generation::GeneratedPattern;
+use crate::kit::DrumKit;
 use std::io::{self, ErrorKind};
 
 const STEPS_PER_BAR: usize = 16;
@@ -32,10 +33,21 @@ pub fn prepare_loop(
     bpm: f32,
     sample_rate: u32,
 ) -> io::Result<PreparedLoop> {
+    prepare_loop_with_kit(pattern, bpm, sample_rate, &DrumKit::default())
+}
+
+/// Re-render one whole bar with the current drum-kit controls.
+/// All allocations and DSP take place on the control thread.
+pub fn prepare_loop_with_kit(
+    pattern: &GeneratedPattern,
+    bpm: f32,
+    sample_rate: u32,
+    kit: &DrumKit,
+) -> io::Result<PreparedLoop> {
     if pattern.classes.len() != STEPS_PER_BAR {
         return Err(invalid("Live prototype needs exactly 16 steps per bar"));
     }
-    let full = render_samples_at_rate(pattern, bpm, sample_rate)?;
+    let full = render_samples_with_kit_at_rate(pattern, bpm, sample_rate, kit)?;
     let bar_frames = (60.0f64 / bpm as f64 * 4.0 * sample_rate as f64)
         .round() as usize;
     if bar_frames == 0 || full.len() < bar_frames {
@@ -112,6 +124,18 @@ mod tests {
         };
         let bar = prepare_loop(&silent, 120.0, 8_000).unwrap();
         assert!(bar.samples.iter().all(|&v| v == 0.0));
+    }
+
+    #[test]
+    fn kit_parameter_changes_audio_without_affecting_bar_length() {
+        let mut kit = DrumKit::default();
+        let baseline = prepare_loop_with_kit(&pattern(), 120.0, 48_000, &kit).unwrap();
+        kit.set(36, "level", 0.0).unwrap();
+        kit.set(46, "tone", 0.9).unwrap();
+        let edited = prepare_loop_with_kit(&pattern(), 120.0, 48_000, &kit).unwrap();
+        assert_eq!(baseline.samples.len(), edited.samples.len());
+        assert_ne!(baseline.samples, edited.samples);
+        assert!(edited.samples.iter().all(|x| x.is_finite()));
     }
 
     #[test]
