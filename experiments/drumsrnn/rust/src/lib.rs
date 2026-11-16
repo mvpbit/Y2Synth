@@ -1,5 +1,6 @@
 //! Read TensorFlow.js Magenta MusicRNN weight shards as little-endian f32.
-//! The crate now includes a standalone BasicLSTMCell step, but not attention or music generation.
+//! The crate includes native Rust LSTM+attention inference, autonomous drum generation,
+//! and an optional synthesized WAV preview; Y2 hardware support is not implemented.
 
 pub mod lstm;
 pub mod attention;
