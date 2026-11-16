@@ -37,16 +37,24 @@ fn tensor<'a>(
     Ok(&value.values)
 }
 
-/// Row-major dense layer: [input_length, output_length].
-fn dense(input: &[f32], kernel: &[f32], bias: &[f32], output: &mut [f32]) {
+/// Row-major matrix multiplication, with optional bias handled separately.
+/// Magenta.js *does not use* the saved attention/query bias tensor in attention.ts.
+fn matmul(input: &[f32], kernel: &[f32], output: &mut [f32]) {
     debug_assert_eq!(input.len() * output.len(), kernel.len());
-    debug_assert_eq!(output.len(), bias.len());
-    output.copy_from_slice(bias);
+    output.fill(0.0);
     for (row, &value) in input.iter().enumerate() {
         let weights = &kernel[row * output.len()..(row + 1) * output.len()];
         for (target, &weight) in output.iter_mut().zip(weights) {
             *target += value * weight;
         }
+    }
+}
+
+fn dense(input: &[f32], kernel: &[f32], bias: &[f32], output: &mut [f32]) {
+    debug_assert_eq!(bias.len(), output.len());
+    matmul(input, kernel, output);
+    for (value, &bias_value) in output.iter_mut().zip(bias) {
+        *value += bias_value;
     }
 }
 
@@ -70,7 +78,7 @@ pub struct AttentionRnn<'a> {
     attention_w: &'a [f32],
     attention_v: &'a [f32],
     attention_kernel: &'a [f32],
-    attention_bias: &'a [f32],
+    _attention_bias: &'a [f32],
     output_kernel: &'a [f32],
     output_bias: &'a [f32],
     class_kernel: &'a [f32],
@@ -158,7 +166,7 @@ impl<'a> AttentionRnn<'a> {
                 &format!("{prefix}attention/kernel"),
                 &[HIDDEN * 6, HIDDEN],
             )?,
-            attention_bias: tensor(
+            _attention_bias: tensor(
                 checkpoint,
                 &format!("{prefix}attention/bias"),
                 &[HIDDEN],
@@ -214,7 +222,7 @@ impl<'a> AttentionRnn<'a> {
         class: usize,
         step: usize,
         state: &mut AttentionState,
-    ) -> io::Result<&'static str> {
+    ) -> io::Result<()> {
         if class >= OUTPUT_CLASSES {
             return Err(invalid(format!("Class index out of range: {class}")));
         }
@@ -246,10 +254,9 @@ impl<'a> AttentionRnn<'a> {
             state.query[offset..offset + HIDDEN].copy_from_slice(&layer.hidden);
             offset += HIDDEN;
         }
-        dense(
-            &state.query, self.attention_kernel, self.attention_bias,
-            &mut state.transformed_query,
-        );
+        // In the original Magenta.js attention.ts: attnY = matMul(query, kernel).
+        // The checkpoint includes attention/bias, but this operation does NOT add it.
+        matmul(&state.query, self.attention_kernel, &mut state.transformed_query);
 
         // 1x1 conv over 32 past output vectors, followed by tanh and v dot.
         // TF shape attn_w is [1,1,256,256]; last two dims are input/output.
@@ -305,7 +312,7 @@ impl<'a> AttentionRnn<'a> {
         if state.logits.iter().any(|value| !value.is_finite()) {
             return Err(invalid("Non-finite class logits"));
         }
-        Ok("ok")
+        Ok(())
     }
 }
 
