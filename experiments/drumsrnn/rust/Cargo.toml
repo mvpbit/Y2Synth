@@ -3,6 +3,7 @@ name = "y2synth-drumsrnn-weights"
 version = "0.1.0"
 edition = "2021"
 publish = false
+default-run = "y2synth-drumsrnn-weights"
 description = "Experimental offline loader for Magenta.js DrumsRNN checkpoint weights"
 
 [dependencies]
