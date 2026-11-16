@@ -139,6 +139,12 @@
         const repeatsPrimer = JSON.stringify(notes) === JSON.stringify(inputHits);
         const maxProbs = probabilities.map(row => Math.max(...row));
         const meanTopProbability = maxProbs.reduce((a, b) => a + b, 0) / maxProbs.length;
+        // First-step probabilities are deterministic for the same silent seed,
+        // even when subsequent sampled steps use randomness.
+        const firstTopFive = Array.from({length: 512}, (_, i) => i)
+          .sort((a, b) => probabilities[0][b] - probabilities[0][a])
+          .slice(0, 5)
+          .map(i => [i, probabilities[0][i]]);
 
         savedResult = {
           experiment: "Y2Synth Magenta.js DrumsRNN reference",
@@ -157,9 +163,10 @@
           continuation: sequence,
           continuationMatchesPrimer: repeatsPrimer,
           meanTopProbability,
+          firstTopFive,
           probabilities,
         };
-        status.textContent = "Reference generation succeeded. Save JSON for comparisons.";
+        status.textContent = "Reference generation succeeded. JSON export is optional.";
         result.textContent = [
           "Model initialization: " + loadMs.toFixed(1) + " ms",
           "Generation (16 steps): " + generationMs.toFixed(1) + " ms",
@@ -169,6 +176,8 @@
           "Generated hits: " + notes.length,
           "Output equals input: " + (isFromScratch ? "not applicable (no user input)" : (repeatsPrimer ? "YES" : "NO")),
           "Mean maximum class probability: " + meanTopProbability.toFixed(4),
+          "First generated step — top 5 classes [id, probability]:",
+          JSON.stringify(firstTopFive.map(([id, p]) => [id, Number(p.toFixed(6))])),
           "Hits [step, MIDI pitch]:",
           JSON.stringify(notes, null, 2),
           "Probability matrix: 16 × 512; saved in JSON only.",
