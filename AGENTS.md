@@ -1,6 +1,6 @@
 # AGENTS.md — правила работы над Y2Synth
 
-Этот файл предназначен для AI-агентов и разработчиков. Прочитай его вместе с [PROJECT](docs/PROJECT.md), [ARCHITECTURE](docs/ARCHITECTURE.md), [ROADMAP](docs/ROADMAP.md) и [DEVELOPMENT](docs/DEVELOPMENT.md) **до** редактирования кода.
+Этот файл предназначен для AI-агентов и разработчиков. Прочитай его вместе с [PROJECT](docs/PROJECT.md), [ARCHITECTURE](docs/ARCHITECTURE.md), [UI MENU](docs/UI_MENU.md), [ROADMAP](docs/ROADMAP.md) и [DEVELOPMENT](docs/DEVELOPMENT.md) **до** редактирования кода.
 
 ## Назначение и приоритеты
 
