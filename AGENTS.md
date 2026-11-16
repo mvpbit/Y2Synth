@@ -36,7 +36,7 @@ cargo run --release --locked --manifest-path experiments/drumsrnn/rust/Cargo.tom
 
 Полный прогон генератора требует предварительно скачанного checkpoint. `--argmax` используется для детерминированной сверки с браузерным Magenta.js, а не для прослушивания: на известном тесте он выдал 16 шагов тишины.
 
-**Статус интеграции:** `src/sequencer.rs` теперь экспортируется из `lib.rs`, добавлены `src/bin/live.rs` и feature-gated CPAL. Код **не прошёл** тесты и прослушивание на Mac. Перед дальнейшей разработкой выполните `cargo test --features live-audio`, `cargo run --features live-audio --bin live` и запишите результат. `Cargo.lock` нужно обновить после изменения зависимостей.
+**Статус интеграции:** live-прототип с CPAL пользователь уже запускал и подтвердил его работу на Mac. После этого аудиопуть переписан: `realtime.rs` с опциональным `triple_buffer 9.0.0` и `AtomicBool`, `sequencer.rs` отвечает за offline-подготовку тактов. Эта версия **ещё не прошла** тесты и прослушивание на Mac. Перед следующими изменениями запустите `cargo test --features live-audio`, `cargo run --features live-audio --bin live`; сохраните обновлённый `Cargo.lock` и протокол проверки.
 
 ## Актуализация документации
 
