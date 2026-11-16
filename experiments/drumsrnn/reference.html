@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Y2Synth — DrumsRNN reference inference</title>
+  <title>Y2Synth — generate drum patterns from scratch</title>
   <style>
     :root { color-scheme: dark; font-family: system-ui, -apple-system, sans-serif; }
     body { max-width: 760px; margin: 40px auto; padding: 0 18px; line-height: 1.5; }
@@ -18,16 +18,16 @@
   <script src="https://cdn.jsdelivr.net/npm/@magenta/music@1.23.1"></script>
 </head>
 <body>
-  <h1>Y2Synth · DrumsRNN</h1>
+  <h1>Y2Synth · Generate from scratch</h1>
   <p class="secondary">Reference inference on Mac, not Rust or Y2. Loads weights from this local HTTP server.</p>
   <p>Checkpoint: <code>models/drum_kit_rnn_tfjs/</code></p>
-  <p>Primer: 16 steps. Continuation: 16 steps. Sampling: argmax (no randomness).</p>
-  <label for="primerSelect">Input pattern:</label>
-  <select id="primerSelect"><option value="regular">Regular groove (original)</option><option value="syncopated">Syncopated groove (control test)</option></select>
+  <p><strong>Default: no human-written drum groove.</strong> A single silent step is an internal bootstrap input, not a user pattern. The model generates 16 new steps.</p>
+  <label for="primerSelect">Generation mode:</label>
+  <select id="primerSelect"><option value="scratch">From scratch — no user input</option><option value="regular">Diagnostic: regular primer</option><option value="syncopated">Diagnostic: syncopated primer</option></select>
   <label for="samplingSelect">Sampling:</label>
-  <select id="samplingSelect"><option value="argmax">Argmax (deterministic)</option><option value="1.0">Temperature 1.0</option><option value="1.2">Temperature 1.2</option></select>
-  <p class="secondary">Use temperature 1.0 or 1.2 to test whether the trained model produces variations instead of copying the primer.</p>
-  <button id="run">Generate reference</button>
+  <select id="samplingSelect"><option value="argmax">Argmax (deterministic)</option><option value="1.0" selected>Temperature 1.0</option><option value="1.2">Temperature 1.2</option></select>
+  <p class="secondary">Temperature 1.0 gives varied results. The two diagnostic primer modes are for regression tests only, not the intended product workflow.</p>
+  <button id="run">Generate pattern</button>
   <button id="save" disabled>Save JSON</button>
   <p id="status" role="status">Ready.</p>
   <pre id="result">No result yet.</pre>
@@ -71,7 +71,15 @@
       pitch, quantizedStartStep: step, quantizedEndStep: step + 1,
       isDrum: true, velocity: 100,
     }));
+    const silentSeed = {
+      notes: [],
+      quantizationInfo: {stepsPerQuarter: 4},
+      tempos: [{time: 0, qpm: 120}],
+      timeSignatures: [{time: 0, numerator: 4, denominator: 4}],
+      totalQuantizedSteps: 1,
+    };
     const primers = {
+      scratch: silentSeed,
       regular: primer,
       syncopated: {...primer, notes: syncopatedNotes},
     };
@@ -117,6 +125,7 @@
 
         const notes = hitPairs(sequence);
         const inputHits = hitPairs(selectedPrimer);
+        const isFromScratch = primerId === "scratch";
         const repeatsPrimer = JSON.stringify(notes) === JSON.stringify(inputHits);
         const maxProbs = probabilities.map(row => Math.max(...row));
         const meanTopProbability = maxProbs.reduce((a, b) => a + b, 0) / maxProbs.length;
@@ -131,8 +140,10 @@
           timestamp: new Date().toISOString(),
           loadMs: Number(loadMs.toFixed(2)),
           generationMs: Number(generationMs.toFixed(2)),
+          generationMode: primerId,
+          noUserInput: isFromScratch,
           primerId,
-          primer: selectedPrimer,
+          internalSeedOrDiagnosticPrimer: selectedPrimer,
           continuation: sequence,
           continuationMatchesPrimer: repeatsPrimer,
           meanTopProbability,
@@ -142,10 +153,11 @@
         result.textContent = [
           "Model initialization: " + loadMs.toFixed(1) + " ms",
           "Generation (16 steps): " + generationMs.toFixed(1) + " ms",
-          "Primer: " + primerId + " (" + inputHits.length + " hits)",
+          "Generation mode: " + (isFromScratch ? "FROM SCRATCH (1 silent bootstrap step)" : primerId + " diagnostic primer"),
+          "Input MIDI hits: " + inputHits.length,
           "Sampling: " + samplingId,
           "Generated hits: " + notes.length,
-          "Generated continuation equals primer: " + (repeatsPrimer ? "YES" : "NO"),
+          "Output equals input: " + (isFromScratch ? "not applicable (no user input)" : (repeatsPrimer ? "YES" : "NO")),
           "Mean maximum class probability: " + meanTopProbability.toFixed(4),
           "Hits [step, MIDI pitch]:",
           JSON.stringify(notes, null, 2),
