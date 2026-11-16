@@ -1,5 +1,5 @@
 //! Minimal local experiment: generate MIDI-style drum events from scratch.
-//! No browser, TensorFlow, audio synthesis or user primer is required.
+//! No browser, TensorFlow.js or user primer is required. WAV output is optional.
 
 use std::env;
 use std::error::Error;
