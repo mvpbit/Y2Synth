@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -84,24 +84,24 @@
 </header>
 <div class="device">
   <div class="device-head"><span>Y2S · 480×360 NATIVE</span><span class="speaker" aria-hidden="true"></span></div>
-  <div class="screen" id="native-screen" data-native-width="480" data-native-height="360" aria-label="Экран Y2Synth: 480 на 360 пикселей">
+  <div class="screen" id="native-screen" data-native-width="480" data-native-height="360" aria-label="Y2Synth display: 480 by 360 pixels">
     <div class="screen-head"><span id="crumb">● HOME</span><span class="right" id="screen-tempo">120 BPM</span></div>
     <div id="screen-main" aria-live="polite"></div>
-    <div class="screen-foot"><span id="screen-message">Нажми PLAY для звука</span><span id="screen-step">01 / 16</span></div>
+    <div class="screen-foot"><span id="screen-message">Press PLAY to start</span><span id="screen-step">01 / 16</span></div>
   </div>
   <div class="controls">
-    <div class="wheel" id="wheel" role="group" aria-label="Колесо Innioasis Y2: проведи по кольцу для прокрутки; центр OK">
-      <button class="return" id="return" aria-label="Назад" title="Назад · Esc">↩</button>
-      <button class="prev" id="prev" aria-label="Предыдущий пункт или шаг" title="Назад по списку / уменьшить · ←">⏮</button>
-      <button class="next" id="next" aria-label="Следующий пункт или шаг" title="Вперёд по списку / увеличить · →">⏭</button>
-      <button class="play" id="play" aria-label="Воспроизвести или приостановить; удерживать для Stop" title="PLAY / PAUSE · удерживать для STOP">▶Ⅱ</button>
-      <button class="center" id="center" aria-label="Подтвердить" title="Выбрать · Enter">OK</button>
+    <div class="wheel" id="wheel" role="group" aria-label="Innioasis Y2 wheel: swipe the ring to scroll; press center for OK">
+      <button class="return" id="return" aria-label="Back" title="Back · Esc">↩</button>
+      <button class="prev" id="prev" aria-label="Previous item or step" title="Previous / decrease · ←">⏮</button>
+      <button class="next" id="next" aria-label="Next item or step" title="Next / increase · →">⏭</button>
+      <button class="play" id="play" aria-label="Play or pause; hold to stop" title="PLAY / PAUSE · hold to STOP">▶Ⅱ</button>
+      <button class="center" id="center" aria-label="Confirm" title="Select · Enter">OK</button>
     </div>
   </div>
 </div>
-<div class="hint">Крути кольцо мышью или пальцем · <kbd>Space</kbd> Play/Pause · <kbd>Enter</kbd> OK · <kbd>↑ ↓</kbd> вращение · <kbd>← →</kbd> Prev/Next · <kbd>Esc</kbd> назад · <kbd>H</kbd> домой</div>
-<div class="tag">480×360 — точная координатная сетка интерфейса (CSS px). Физический масштаб на мониторе Mac зависит от его DPI и zoom браузера.</div>
-<div class="tag">Web Audio — имитация, без запуска Rust / DrumsRNN. Параметры страницы не хранятся на сервере.</div>
+<div class="hint">Drag around the ring with a mouse or finger · <kbd>Space</kbd> Play/Pause · <kbd>Enter</kbd> OK · <kbd>↑ ↓</kbd> rotate · <kbd>← →</kbd> Prev/Next · <kbd>Esc</kbd> back · <kbd>H</kbd> home</div>
+<div class="tag">480×360 is the exact UI grid in CSS pixels. Physical size on your monitor depends on DPI and browser zoom.</div>
+<div class="tag">Web Audio simulation; Rust / DrumsRNN is not running. Page settings are not stored on a server.</div>
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
@@ -111,7 +111,7 @@ const state = {
   // Instrument roles are fixed: Pluck and Pad are separate named instruments.
   pluck:{level:0.67,notes:[]}, pad:{level:0.6,notes:[]},
   drums:{kick:[0,8],snare:[4,12],hat:[0,2,4,6,8,10,12,14]},
-  message:"Нажми PLAY для звука",
+  message:"Press PLAY to start",
   fx:{delay:true, delaySteps:2, delayFeedback:.38, delayWet:.3,
       reverb:true, reverbSize:.65, reverbDamping:.42, reverbWet:.3},
 };
@@ -180,7 +180,7 @@ function rebuildReverb(){
 function initAudio(){
   if(audio.ctx)return;
   const Context=window.AudioContext||window.webkitAudioContext;
-  if(!Context)throw new Error("Web Audio API недоступен в этом браузере");
+  if(!Context)throw new Error("Web Audio API is not available in this browser");
   const ctx=new Context();audio.ctx=ctx;
   audio.mix=ctx.createGain();audio.mix.gain.value=.65;
   const intoReverb=ctx.createGain();
@@ -274,7 +274,7 @@ async function transport(){
     state.playing=false;
     state.paused=true;
     clearInterval(audio.timer);audio.timer=null;
-    inform("PAUSE · нажми ▶Ⅱ для продолжения");
+    inform("PAUSE · press ▶Ⅱ to resume");
   }else{
     try{initAudio();await audio.ctx.resume();}
     catch(error){inform("Audio: "+error.message);return;}
@@ -282,7 +282,7 @@ async function transport(){
     state.playing=true;state.paused=false;
     audio.nextTime=audio.ctx.currentTime+.065;
     audio.timer=setInterval(scheduler,24);scheduler();
-    inform("PLAY · 16 шагов");
+    inform("PLAY · 16 steps");
   }
   render();
 }
@@ -290,7 +290,7 @@ function stopTransport(){
   clearInterval(audio.timer);audio.timer=null;
   state.playing=false;state.paused=false;state.playhead=0;
   audio.step=0;
-  inform("STOP · такт сброшен");
+  inform("STOP · bar reset");
   render();
 }
 function generateDrums(){
@@ -299,7 +299,7 @@ function generateDrums(){
   for(let step=0;step<16;step+=2)if(Math.random()<.92)hat.push(step);
   for(const step of [3,7,11,15])if(Math.random()<.25)hat.push(step);
   state.drums={kick,snare,hat};
-  inform("Новый алгоритмический ритм (не DrumsRNN)");
+  inform("New algorithmic rhythm (not DrumsRNN)");
 }
 function generateInstrument(instrument){
   const roots=[48,50,52,53,55,57],root=roots[Math.floor(Math.random()*roots.length)];
@@ -322,57 +322,57 @@ function generateInstrument(instrument){
       }));
   }
   state[instrument].notes=notes;
-  inform("Новая партия "+instrument.toUpperCase());
+  inform("New pattern: "+instrument.toUpperCase());
 }
 function restoreDemo(instrument){
   state[instrument].notes=demoNotes(instrument);
-  inform("Демо-партия "+instrument.toUpperCase()+" восстановлена");
+  inform("Demo pattern: "+instrument.toUpperCase()+" restored");
 }
 function go(page){state.stack.push(state.page);state.page=page;state.focus=0;state.editing=false;render();}
 function back(){
-  if(state.editing){state.editing=false;inform("Редактирование завершено");render();return;}
+  if(state.editing){state.editing=false;inform("Editing finished");render();return;}
   if(state.stack.length){state.page=state.stack.pop();state.focus=0;render();}
   else if(state.page!=="home"){home();}
 }
 function home(){state.page="home";state.stack=[];state.focus=0;state.editing=false;render();}
 const choices={
   settings:()=>[
-    {label:"USER",sub:"Инструменты и параметры",action:()=>go("user")},
-    {label:"AI",sub:"Создание новых партий",action:()=>go("ai")},
+    {label:"USER",sub:"Instruments and settings",action:()=>go("user")},
+    {label:"AI",sub:"Create new patterns",action:()=>go("ai")},
     {label:"MASTER FX",sub:"Delay → Reverb",action:()=>go("fx")},
     {label:"TEMPO",sub:state.bpm+" BPM",action:()=>go("tempo")},
   ],
   user:()=>[
-    {label:"PLUCK",sub:"Мелодия · ноты и уровень",action:()=>go("pluck")},
-    {label:"PAD",sub:"Аккорды · ноты и уровень",action:()=>go("pad")},
-    {label:"DRUMS",sub:"Ритмический рисунок",action:()=>go("drums")},
+    {label:"PLUCK",sub:"Melody · notes and level",action:()=>go("pluck")},
+    {label:"PAD",sub:"Chords · notes and level",action:()=>go("pad")},
+    {label:"DRUMS",sub:"Rhythm pattern",action:()=>go("drums")},
   ],
   ai:()=>[
-    {label:"GENERATE TRACK",sub:"Выбрать дорожку",action:()=>go("aiTrack")},
-    {label:"GENERATE ALL",sub:"Пока не реализовано",disabled:true},
+    {label:"GENERATE TRACK",sub:"Choose a track",action:()=>go("aiTrack")},
+    {label:"GENERATE ALL",sub:"Not implemented yet",disabled:true},
   ],
   aiTrack:()=>[
-    {label:"PLUCK",sub:"Новая мелодия",action:()=>{generateInstrument("pluck");render();}},
-    {label:"PAD",sub:"Новая гармония",action:()=>{generateInstrument("pad");render();}},
-    {label:"DRUMS",sub:"Браузерный алгоритм, не DrumsRNN",action:()=>{generateDrums();render();}},
+    {label:"PLUCK",sub:"New melody",action:()=>{generateInstrument("pluck");render();}},
+    {label:"PAD",sub:"New harmony",action:()=>{generateInstrument("pad");render();}},
+    {label:"DRUMS",sub:"Browser algorithm, not DrumsRNN",action:()=>{generateDrums();render();}},
   ],
   pluck:()=>[
-    {label:"GENERATE MELODY",sub:"Pluck · новая мелодия",action:()=>{generateInstrument("pluck");render();}},
-    {label:"DEMO PHRASE",sub:"Вернуть исходные ноты",action:()=>{restoreDemo("pluck");render();}},
-    {label:"LEVEL",sub:"◀ / ▶ · громкость Pluck",value:format(state.pluck.level),key:"pluckLevel"},
+    {label:"GENERATE MELODY",sub:"Pluck · new melody",action:()=>{generateInstrument("pluck");render();}},
+    {label:"DEMO PHRASE",sub:"Restore the demo notes",action:()=>{restoreDemo("pluck");render();}},
+    {label:"LEVEL",sub:"◀ / ▶ · Pluck level",value:format(state.pluck.level),key:"pluckLevel"},
   ],
   pad:()=>[
-    {label:"GENERATE CHORDS",sub:"Pad · новая гармония",action:()=>{generateInstrument("pad");render();}},
-    {label:"DEMO CHORDS",sub:"Вернуть исходные аккорды",action:()=>{restoreDemo("pad");render();}},
-    {label:"LEVEL",sub:"◀ / ▶ · громкость Pad",value:format(state.pad.level),key:"padLevel"},
+    {label:"GENERATE CHORDS",sub:"Pad · new harmony",action:()=>{generateInstrument("pad");render();}},
+    {label:"DEMO CHORDS",sub:"Restore the demo chords",action:()=>{restoreDemo("pad");render();}},
+    {label:"LEVEL",sub:"◀ / ▶ · Pad level",value:format(state.pad.level),key:"padLevel"},
   ],
   drums:()=>[
-    {label:"GENERATE RHYTHM",sub:"Браузерная имитация",action:()=>{generateDrums();render();}},
-    {label:"KICK",sub:"Нажми для включения/выключения удара по шагам в HOME",value:state.drums.kick.length},
+    {label:"GENERATE RHYTHM",sub:"Browser simulation",action:()=>{generateDrums();render();}},
+    {label:"KICK",sub:"Tap steps on HOME to toggle hits",value:state.drums.kick.length},
     {label:"SNARE",value:state.drums.snare.length},
     {label:"HAT",value:state.drums.hat.length},
   ],
-  tempo:()=>[{label:"BPM",sub:"◀ / ▶ меняет на 2 BPM",value:state.bpm,key:"bpm"}],
+  tempo:()=>[{label:"BPM",sub:"◀ / ▶ adjusts by 2 BPM",value:state.bpm,key:"bpm"}],
   fx:()=>[
     {label:"DELAY",value:state.fx.delay?"ON":"OFF",key:"delay",toggle:true},
     {label:"DELAY STEPS",value:state.fx.delaySteps+" × 1/16",key:"delaySteps"},
@@ -407,7 +407,7 @@ function activate(index=state.focus){
   const items=choices[state.page]?.()||[],item=items[index];
   if(!item||item.disabled)return;
   if(state.editing && index===state.focus){
-    state.editing=false;inform("Значение принято");render();return;
+    state.editing=false;inform("Value confirmed");render();return;
   }
   state.editing=false;
   state.focus=index;
@@ -417,7 +417,7 @@ function activate(index=state.focus){
     inform(item.label+" "+(state.fx[item.key]?"ON":"OFF"));render();
   }else if(item.key){
     // The ring changes a value only after pressing OK on that row.
-    state.editing=true;inform(item.label+" · вращай кольцо · OK готово");render();
+    state.editing=true;inform(item.label+" · rotate ring · OK to finish");render();
   }
 }
 function direction(delta){
@@ -434,7 +434,7 @@ function direction(delta){
 function seekStep(delta){
   const next=(audio.step+delta+16)%16;
   audio.step=next;state.playhead=next;
-  inform("Шаг "+String(next+1).padStart(2,"0")+" / 16");render();
+  inform("Step "+String(next+1).padStart(2,"0")+" / 16");render();
 }
 function leftRight(delta){
   if(state.page==="home"){seekStep(delta);return;}
@@ -459,15 +459,15 @@ function stepGrid(label,entries,id){
       const on=active.has(i);
       return '<button class="beat '+(on?"on ":"")+(id==="pluck"||id==="pad"?"instrument ":"")+
         (state.playhead===i&&state.playing?"head":"")+'" data-step="'+i+
-        '" data-voice="'+id+'" aria-label="'+label+' шаг '+(i+1)+
+        '" data-voice="'+id+'" aria-label="'+label+' step '+(i+1)+
         '"></button>';
     }).join('')+"</div></div>";
 }
 function renderHome(){
-  const sound=state.playing?"ИГРАЕТ":"ГОТОВ";
+  const sound=state.playing?"PLAYING":"READY";
   return '<div class="eyebrow">'+sound+' · QUICK PLAY</div>'+
     '<div class="huge">PLAY <span>'+ (state.playing?"◉":"▶")+'</span></div>'+
-    '<div class="sub">OK → настройки · Pluck + Pad · '+state.bpm+' BPM</div>'+
+    '<div class="sub">OK → settings · Pluck + Pad · '+state.bpm+' BPM</div>'+
     '<div class="strip"><span class="chip strong">DRUMS</span><span class="chip">PLUCK</span>'+
     '<span class="chip">PAD</span><span class="chip">FX '+(state.fx.delay?"D":"–")+'/'+(state.fx.reverb?"R":"–")+'</span></div>'+
     stepGrid("KICK",state.drums.kick,"kick")+
@@ -491,10 +491,10 @@ function render(){
         '<span>'+item.label+(item.sub?'<small>'+item.sub+'</small>':"")+'</span>'+
         '<b>'+(item.value??(item.disabled?"—":"›"))+'</b></button>'
       ).join('')+'</div>'+
-      (state.editing?'<div class="notice">◉ Вращай кольцо, OK — принять значение</div>':
-       state.page==="fx"?'<div class="notice">Крути кольцо · OK — выбрать / изменить</div>':
-       state.page==="tempo"?'<div class="notice">40–240 BPM · изменение слышно со следующего шага</div>':
-       state.page==="ai"?'<div class="notice">Браузерная генерация не использует Magenta / Rust</div>':"");
+      (state.editing?'<div class="notice">◉ Rotate ring · OK to confirm</div>':
+       state.page==="fx"?'<div class="notice">Rotate ring · OK to select / edit</div>':
+       state.page==="tempo"?'<div class="notice">40–240 BPM · changes apply on the next step</div>':
+       state.page==="ai"?'<div class="notice">Browser generation does not use Magenta / Rust</div>':"");
   }
 }
 out.addEventListener("click",(event)=>{
@@ -502,13 +502,13 @@ out.addEventListener("click",(event)=>{
   if(beat){
     const voice=beat.dataset.voice,index=Number(beat.dataset.step);
     if(voice==="pluck"||voice==="pad"){
-      inform("Партия "+(voice==="pluck"?"PLUCK":"PAD")+" · USER");
+      inform("Pattern: "+(voice==="pluck"?"PLUCK":"PAD")+" · USER");
       return;
     }
     const steps=state.drums[voice],at=steps.indexOf(index);
     if(at===-1)steps.push(index);else steps.splice(at,1);
     steps.sort((a,b)=>a-b);
-    inform(voice.toUpperCase()+" · шаг "+(index+1));render();return;
+    inform(voice.toUpperCase()+" · step "+(index+1));render();return;
   }
   const row=event.target.closest("[data-index]");
   if(row&&!row.disabled)activate(Number(row.dataset.index));
