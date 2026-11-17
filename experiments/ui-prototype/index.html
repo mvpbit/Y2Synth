@@ -40,16 +40,29 @@
   .item:disabled{opacity:.4;cursor:not-allowed}
   .item:hover:not(:disabled){border-color:#8eb19c}
   .notice {margin:9px 0;color:#c2cfc6;font-size:11px;min-height:16px}
-  .controls {display:flex;justify-content:space-between;align-items:center;gap:12px;margin:20px 5px 5px}
-  .transport {display:flex;flex-direction:column;gap:10px;min-width:115px}
-  .key {border:1px solid #65736c;border-radius:12px;background:linear-gradient(#55625e,#323e3a);color:#f1f6ec;cursor:pointer;font-weight:700;letter-spacing:.09em;box-shadow:0 4px 0 #1a2320;padding:13px 12px;font-size:11px}
-  .key:active {transform:translateY(3px);box-shadow:0 1px 0 #1a2320}
-  .key.play{background:linear-gradient(#f1c778,#a78036);border-color:#ffe0a2;color:#1e2118;font-size:15px}
-  .wheel {width:184px;height:184px;min-width:184px;border-radius:50%;position:relative;background:radial-gradient(circle at 43% 35%,#5d6b66,#1b2522 75%);border:2px solid #7b8982;box-shadow:inset 0 2px 6px #ffffff22,0 8px 20px #0008}
-  .wheel button {position:absolute;border:0;background:transparent;color:#e3eee5;cursor:pointer;font-size:18px;display:flex;align-items:center;justify-content:center}
-  .wheel button:hover{color:var(--accent)}.wheel .up{top:4px;left:65px;width:50px;height:39px}.wheel .down{bottom:4px;left:65px;width:50px;height:39px}
-  .wheel .left{top:66px;left:2px;width:44px;height:48px}.wheel .right{top:66px;right:2px;width:44px;height:48px}
-  .wheel .center{width:83px;height:83px;top:48px;left:48px;background:radial-gradient(circle at 30% 25%,#e1e6dd,#9cab9e);border:2px solid #c8d0c3;color:#293530;border-radius:50%;font-size:11px;font-weight:800;box-shadow:0 5px 10px #0007}
+  .controls {display:flex;justify-content:center;align-items:center;margin:22px 0 3px}
+  /* Y2 touch click-wheel: the ring is swipeable, buttons are press zones. */
+  .wheel {width:212px;height:212px;flex:none;border-radius:50%;position:relative;overflow:hidden;
+    background:radial-gradient(circle at 38% 30%,#fbfbf7,#e7ebe5 78%,#c9d6cf);
+    border:2px solid #aabbb1;box-shadow:inset 0 2px 3px #fff9,inset 0 -3px 6px #5c6b6266,0 10px 20px #0007;
+    touch-action:none;user-select:none;-webkit-user-select:none;cursor:grab}
+  .wheel:active {cursor:grabbing}
+  .wheel::before {content:"";position:absolute;inset:8px;border:6px solid #bfd2c9;
+    border-top-color:#5fbba6;border-right-color:#68c4ac;border-radius:50%;pointer-events:none;opacity:.88}
+  .wheel.rotating::before {border-color:#85d9c4;border-bottom-color:#b7d1c5}
+  .wheel button {position:absolute;z-index:2;display:flex;align-items:center;justify-content:center;
+    padding:0;border:0;border-radius:50%;background:transparent;color:#41584e;cursor:pointer;font-size:18px;
+    font-weight:700;line-height:1;touch-action:none}
+  .wheel button:not(.center):hover {background:#a4d2c355;color:#1a5747}
+  .wheel button:focus-visible {outline:2px solid #166b5a;outline-offset:-1px}
+  .wheel .return {top:8px;left:75px;width:60px;height:48px;font-size:21px}
+  .wheel .prev {top:80px;left:8px;width:48px;height:48px;font-size:20px}
+  .wheel .next {top:80px;right:8px;width:48px;height:48px;font-size:20px}
+  .wheel .play {bottom:8px;left:75px;width:60px;height:48px;font-size:20px}
+  .wheel .center {top:62px;left:62px;width:84px;height:84px;border:2px solid #8fae9e;
+    background:radial-gradient(circle at 35% 27%,#e8f3ec,#b4d2c4 83%);
+    box-shadow:inset 0 2px 3px #fff8,0 4px 10px #65786c66;
+    color:#284638;font-size:14px;letter-spacing:.11em;font-weight:800}
   .hint {max-width:530px;margin-top:14px;color:#a5b0ab;font-size:12px;text-align:center}
   .hint kbd{font-family:inherit;border:1px solid #58645d;border-radius:3px;padding:1px 5px;color:#cfdbcf}
   .tag {display:inline-block;margin:5px 0;color:#8eaaa0;font-size:10px;letter-spacing:.1em}
@@ -73,21 +86,16 @@
     <div class="screen-foot"><span id="screen-message">Нажми PLAY для звука</span><span id="screen-step">01 / 16</span></div>
   </div>
   <div class="controls">
-    <div class="transport">
-      <button class="key play" id="play" aria-label="Воспроизведение / остановка">▶ PLAY</button>
-      <button class="key" id="back">↩ BACK</button>
-      <button class="key" id="home">⌂ HOME</button>
-    </div>
-    <div class="wheel" role="group" aria-label="Имитация колеса Y2">
-      <button class="up" id="up" aria-label="Предыдущий пункт">▲</button>
-      <button class="left" id="left" aria-label="Уменьшить">◀</button>
-      <button class="right" id="right" aria-label="Увеличить">▶</button>
-      <button class="down" id="down" aria-label="Следующий пункт">▼</button>
-      <button class="center" id="center">SELECT</button>
+    <div class="wheel" id="wheel" role="group" aria-label="Колесо Innioasis Y2: проведи по кольцу для прокрутки; центр OK">
+      <button class="return" id="return" aria-label="Назад" title="Назад · Esc">↩</button>
+      <button class="prev" id="prev" aria-label="Предыдущий пункт или шаг" title="Назад по списку / уменьшить · ←">⏮</button>
+      <button class="next" id="next" aria-label="Следующий пункт или шаг" title="Вперёд по списку / увеличить · →">⏭</button>
+      <button class="play" id="play" aria-label="Воспроизвести или приостановить; удерживать для Stop" title="PLAY / PAUSE · удерживать для STOP">▶Ⅱ</button>
+      <button class="center" id="center" aria-label="Подтвердить" title="Выбрать · Enter">OK</button>
     </div>
   </div>
 </div>
-<div class="hint">Управление: <kbd>Space</kbd> PLAY · <kbd>Enter</kbd> SELECT · <kbd>↑</kbd>/<kbd>↓</kbd> меню · <kbd>←</kbd>/<kbd>→</kbd> значение · <kbd>Esc</kbd> назад</div>
+<div class="hint">Крути кольцо мышью или пальцем · <kbd>Space</kbd> Play/Pause · <kbd>Enter</kbd> OK · <kbd>↑ ↓</kbd> вращение · <kbd>← →</kbd> Prev/Next · <kbd>Esc</kbd> назад · <kbd>H</kbd> домой</div>
 <div class="tag">480×360 — точная координатная сетка интерфейса (CSS px). Физический масштаб на мониторе Mac зависит от его DPI и zoom браузера.</div>
 <div class="tag">Web Audio — имитация, без запуска Rust / DrumsRNN. Параметры страницы не хранятся на сервере.</div>
 <script>
