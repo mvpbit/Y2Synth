@@ -53,7 +53,8 @@
 - [x] `prepare_project_loop` смешивает Synth 1 и Drums на control thread, готовый буфер публикуется на границе такта; CPAL callback не изменён.
 - [x] `ApplicationController::set_synth1`: сохраняет USER-трек и RAM-снимок **только после** успешного рендера/публикации; Generate Drums, BPM, DrumKit и PLAY учитывают оба инструмента.
 - [x] `live` добавляет `synth1 pluck|pad|show|clear`, `synth1 level N`, `synth1 note STEP PITCH LENGTH`.
-- [ ] Выполнить `cargo test --locked --features live-audio`, послушать оба пресета на Mac Studio и проверить музыкальность/баланс/щелчки при переключении.
+- [x] Пользователь сообщил «Работает отлично» после запуска нового Synth 1 на Mac Studio — предварительная live-проверка звучания успешна.
+- [ ] Отдельно зафиксировать полный вывод `cargo test --locked --features live-audio`, объективные проверки баланса/щелчков и длительную стабильность.
 - [ ] Нормальный полифонический редактор на экране Y2, MIDI-управление, долговременное сохранение, AI для Synth 1, контроль CPU/RAM устройства.
 
 **План:**
