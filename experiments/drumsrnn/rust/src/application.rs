@@ -11,6 +11,7 @@
 
 use crate::generation::GeneratedPattern;
 use crate::kit::DrumKit;
+use crate::master_fx::{render_master_bar, MasterEffects};
 use crate::melody::RhythmContext;
 use crate::project::{CreationMode, MusicProject, MusicSession, TrackId};
 use crate::sequencer::{prepare_project_loop, PreparedLoop};
@@ -109,7 +110,13 @@ impl ApplicationController {
         let drums = project.drums()
             .map(|track| (&track.content.pattern, &track.content.kit));
         let synth1 = project.synth1().map(|track| &track.content);
-        prepare_project_loop(drums, synth1, project.bpm(), self.sample_rate)
+        let mut bar = prepare_project_loop(drums, synth1, project.bpm(), self.sample_rate)?;
+        // A single serial insert after all track mixing: Drums + Synths
+        // -> tempo-synced delay -> room reverb -> ready PCM loop.
+        bar.samples = render_master_bar(
+            &bar.samples, project.bpm(), self.sample_rate, project.master_fx(),
+        )?;
+        Ok(bar)
     }
 
     /// The initial drum pattern is already AI-generated on the control thread.
@@ -230,6 +237,25 @@ impl ApplicationController {
         audio.queue_bar(bar)?;
         *self.session.current_mut() = proposed;
         self.session.save_current();
+        Ok(())
+    }
+
+    /// Update shared master inserts without replacing or regenerating tracks.
+    /// Like BPM and kit edits, this is atomic from the project perspective:
+    /// failed DSP/AudioPort publication retains previous saved settings.
+    pub fn set_master_fx<A: AudioPort>(
+        &mut self, effects: MasterEffects, audio: &mut A,
+    ) -> io::Result<()> {
+        let mut proposed = self.session.current().clone();
+        proposed.set_master_fx(effects)?;
+        if proposed.has_content() {
+            let bar = self.prepare_project(&proposed)?;
+            audio.queue_bar(bar)?;
+        }
+        *self.session.current_mut() = proposed;
+        if self.session.current().has_content() {
+            self.session.save_current();
+        }
         Ok(())
     }
 
@@ -531,6 +557,64 @@ mod tests {
         assert_eq!(app.session().last_saved().unwrap().synth1().unwrap().content, synth);
         assert_eq!(app.session().last_saved().unwrap().drums().unwrap().content.pattern.hits[0].pitch, 38);
         assert_eq!(app.session().last_saved().unwrap().bpm(), 90.0);
+    }
+
+    #[test]
+    fn master_fx_processes_whole_mix_and_is_saved_for_play_and_tempo_changes() {
+        use crate::synth1::{SynthPreset, SynthTrack};
+        let mut app = ApplicationController::new(8_000, 120.0).unwrap();
+        let mut audio = TestAudio::default();
+        app.install_initial_drums(pattern(36), DrumKit::default(), &mut audio).unwrap();
+        app.set_synth1(SynthTrack::demo(SynthPreset::Pluck), &mut audio).unwrap();
+
+        let mut dry = app.session().current().master_fx();
+        dry.delay.enabled = false;
+        dry.reverb.enabled = false;
+        app.set_master_fx(dry, &mut audio).unwrap();
+        let dry_bar = audio.queued.last().unwrap().samples.clone();
+
+        let mut wet = MasterEffects::default();
+        wet.delay.steps = 4;
+        wet.delay.wet = 0.4;
+        wet.reverb.wet = 0.32;
+        app.set_master_fx(wet, &mut audio).unwrap();
+        let mixed_wet = audio.queued.last().unwrap().samples.clone();
+        assert_ne!(mixed_wet, dry_bar);
+        assert_eq!(app.session().last_saved().unwrap().master_fx(), wet);
+        assert!(app.session().last_saved().unwrap().synth1().is_some());
+        assert!(app.session().last_saved().unwrap().drums().is_some());
+        assert!(mixed_wet.iter().all(|x| x.is_finite() && x.abs() <= 0.851));
+
+        app.set_bpm(80.0, &mut audio).unwrap();
+        assert_eq!(audio.queued.last().unwrap().samples.len(), 24_000);
+        assert_eq!(app.session().last_saved().unwrap().master_fx(), wet);
+        let last = audio.queued.last().unwrap().samples.clone();
+        app.dispatch(
+            Command::PlayLast,
+            &mut || -> io::Result<GeneratedPattern> { panic!("PLAY must not regenerate") },
+            &mut audio,
+        ).unwrap();
+        assert_eq!(audio.queued.last().unwrap().samples, last);
+    }
+
+    #[test]
+    fn invalid_fx_and_rejected_audio_never_change_saved_project() {
+        let mut app = ApplicationController::new(8_000, 120.0).unwrap();
+        let mut audio = TestAudio::default();
+        app.install_initial_drums(pattern(36), DrumKit::default(), &mut audio).unwrap();
+        let settings = app.session().last_saved().unwrap().master_fx();
+
+        let mut bad = settings;
+        bad.delay.feedback = f32::NAN;
+        assert!(app.set_master_fx(bad, &mut audio).is_err());
+        assert_eq!(app.session().current().master_fx(), settings);
+
+        audio.reject_queue = true;
+        let mut valid = settings;
+        valid.reverb.wet = 0.4;
+        assert!(app.set_master_fx(valid, &mut audio).is_err());
+        assert_eq!(app.session().current().master_fx(), settings);
+        assert_eq!(app.session().last_saved().unwrap().master_fx(), settings);
     }
 
     #[test]
