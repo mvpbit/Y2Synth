@@ -300,11 +300,11 @@ function generateSynth(track){
       }));
   }
   state[track].notes=notes;
-  inform("Новая партия "+(track==="synth1"?"SYNTH1 / Pluck":"SYNTH2 / Pad"));
+  inform("Новая партия "+(track==="synth1"?"PLUCK":"PAD"));
 }
 function restoreDemo(track){
   state[track].notes=demoNotes(track==="synth1"?"Pluck":"Pad");
-  inform("Восстановлена демо-партия "+track.toUpperCase());
+  inform("Демо-партия "+(track==="synth1"?"PLUCK":"PAD")+" восстановлена");
 }
 function go(page){state.stack.push(state.page);state.page=page;state.focus=0;render();}
 function back(){if(state.stack.length){state.page=state.stack.pop();state.focus=0;render();}else if(state.page!=="home"){state.page="home";state.focus=0;render();}}
@@ -317,17 +317,17 @@ const choices={
     {label:"TEMPO",sub:state.bpm+" BPM",action:()=>go("tempo")},
   ],
   user:()=>[
-    {label:"SYNTH 1",sub:"Pluck · ноты и уровень",action:()=>go("synth1")},
-    {label:"SYNTH 2",sub:"Pad · аккорды и уровень",action:()=>go("synth2")},
+    {label:"PLUCK",sub:"Мелодия · ноты и уровень",action:()=>go("synth1")},
+    {label:"PAD",sub:"Аккорды · ноты и уровень",action:()=>go("synth2")},
     {label:"DRUMS",sub:"Ритмический рисунок",action:()=>go("drums")},
   ],
   ai:()=>[
     {label:"GENERATE TRACK",sub:"Выбрать дорожку",action:()=>go("aiTrack")},
-    {label:"GENERATE ALL",sub:"Потребуется Synth 2",disabled:true},
+    {label:"GENERATE ALL",sub:"Пока не реализовано",disabled:true},
   ],
   aiTrack:()=>[
-    {label:"SYNTH 1",sub:"Pluck · новая мелодия",action:()=>{generateSynth("synth1");render();}},
-    {label:"SYNTH 2",sub:"Pad · новая гармония",action:()=>{generateSynth("synth2");render();}},
+    {label:"PLUCK",sub:"Новая мелодия",action:()=>{generateSynth("synth1");render();}},
+    {label:"PAD",sub:"Новая гармония",action:()=>{generateSynth("synth2");render();}},
     {label:"DRUMS",sub:"Браузерный алгоритм, не DrumsRNN",action:()=>{generateDrums();render();}},
   ],
   synth1:()=>[
@@ -418,18 +418,18 @@ function renderHome(){
   return '<div class="eyebrow">'+sound+' · QUICK PLAY</div>'+
     '<div class="huge">PLAY <span>'+ (state.playing?"◉":"▶")+'</span></div>'+
     '<div class="sub">CENTER → настройки · Pluck + Pad · '+state.bpm+' BPM</div>'+
-    '<div class="strip"><span class="chip strong">DRUMS</span><span class="chip">S1 / PLUCK</span>'+
-    '<span class="chip">S2 / PAD</span><span class="chip">FX '+(state.fx.delay?"D":"–")+'/'+(state.fx.reverb?"R":"–")+'</span></div>'+
+    '<div class="strip"><span class="chip strong">DRUMS</span><span class="chip">PLUCK</span>'+
+    '<span class="chip">PAD</span><span class="chip">FX '+(state.fx.delay?"D":"–")+'/'+(state.fx.reverb?"R":"–")+'</span></div>'+
     stepGrid("KICK",state.drums.kick,"kick")+
     stepGrid("SNARE",state.drums.snare,"snare")+
     stepGrid("HAT",state.drums.hat,"hat")+
-    stepGrid("SYNTH1",[...new Set(state.synth1.notes.map(n=>n.step))],"synth1")+
-    stepGrid("SYNTH2",[...new Set(state.synth2.notes.map(n=>n.step))],"synth2");
+    stepGrid("PLUCK",[...new Set(state.synth1.notes.map(n=>n.step))],"synth1")+
+    stepGrid("PAD",[...new Set(state.synth2.notes.map(n=>n.step))],"synth2");
 }
 function render(){
   $("screen-tempo").textContent=state.bpm+" BPM";
   $("crumb").textContent="● "+({home:"HOME",settings:"PLAY SETTINGS",user:"USER",ai:"AI",aiTrack:"GENERATE TRACK",
-    synth1:"SYNTH 1 / PLUCK",synth2:"SYNTH 2 / PAD",drums:"DRUMS",fx:"MASTER FX",tempo:"TEMPO"}[state.page]||state.page);
+    synth1:"PLUCK",synth2:"PAD",drums:"DRUMS",fx:"MASTER FX",tempo:"TEMPO"}[state.page]||state.page);
   $("screen-message").textContent=state.message;
   $("screen-step").textContent=String(state.playhead+1).padStart(2,"0")+" / 16";
   if(state.page==="home"){out.innerHTML=renderHome();}
@@ -453,7 +453,7 @@ out.addEventListener("click",(event)=>{
   if(beat){
     const voice=beat.dataset.voice,index=Number(beat.dataset.step);
     if(voice==="synth1"||voice==="synth2"){
-      inform("Партия "+voice.toUpperCase()+" · USER → "+voice.toUpperCase());
+      inform("Партия "+(voice==="synth1"?"PLUCK":"PAD")+" · USER");
       return;
     }
     const steps=state.drums[voice],at=steps.indexOf(index);
