@@ -29,7 +29,7 @@
   .seq-row {display:flex;align-items:center;gap:6px;margin:7px 0}
   .seq {display:grid;grid-template-columns:repeat(16,minmax(0,1fr));flex:1;gap:3px}
   .beat {border:1px solid #324942;border-radius:3px;height:15px;min-width:0;background:#1c302a;cursor:pointer;padding:0}
-  .beat.on {background:#71c8aa;border-color:#a4ddc8}.beat.synth.on{background:#dfb96b;border-color:#f0dca9}
+  .beat.on {background:#71c8aa;border-color:#a4ddc8}.beat.synth.on{background:#dfb96b;border-color:#f0dca9}.beat.unavailable{background:#182a25;border-color:#293c35;opacity:.55;cursor:not-allowed}
   .beat.head{outline:1px solid #fff;outline-offset:1px}
   .beat:nth-child(4n+1){border-left:2px solid #62796c}
   .menu {display:grid;gap:5px;max-height:245px;overflow-y:auto;scrollbar-color:#4a675b transparent}
@@ -389,9 +389,12 @@ function stepGrid(label,entries,id){
   return '<div class="seq-row"><span class="seq-label">'+label+'</span><div class="seq">'+
     Array.from({length:16},(_,i)=>{
       const on=active.has(i);
-      return '<button class="beat '+(on?"on ":"")+(id==="synth"?"synth ":"")+
+      return '<button class="beat '+(on?"on ":"")+(id==="synth1"?"synth ":"")+
+        (id==="synth2"?"unavailable ":"")+
         (state.playhead===i&&state.playing?"head":"")+'" data-step="'+i+
-        '" data-voice="'+id+'" aria-label="'+label+' шаг '+(i+1)+'"></button>';
+        '" data-voice="'+id+'" aria-label="'+label+' шаг '+(i+1)+
+        (id==="synth2"?" (пока недоступно)":"")+
+        '" '+(id==="synth2"?"disabled ":"")+'></button>';
     }).join('')+"</div></div>";
 }
 function renderHome(){
@@ -404,8 +407,8 @@ function renderHome(){
     stepGrid("KICK",state.drums.kick,"kick")+
     stepGrid("SNARE",state.drums.snare,"snare")+
     stepGrid("HAT",state.drums.hat,"hat")+
-    stepGrid("SYNTH",[...new Set(state.notes.map(n=>n.step))],"synth")+
-    '<div class="notice">Нажимай клетки DRUMS для редактирования ударов.</div>';
+    stepGrid("SYNTH1",[...new Set(state.notes.map(n=>n.step))],"synth1")+
+    stepGrid("SYNTH2",[],"synth2");
 }
 function render(){
   $("screen-tempo").textContent=state.bpm+" BPM";
@@ -433,7 +436,8 @@ out.addEventListener("click",(event)=>{
   const beat=event.target.closest(".beat");
   if(beat){
     const voice=beat.dataset.voice,index=Number(beat.dataset.step);
-    if(voice==="synth"){inform("Ноты Synth 1 редактируются через USER → SYNTH 1");return;}
+    if(voice==="synth1"){inform("Ноты Synth 1 редактируются через USER → SYNTH 1");return;}
+    if(voice==="synth2")return;
     const steps=state.drums[voice],at=steps.indexOf(index);
     if(at===-1)steps.push(index);else steps.splice(at,1);
     steps.sort((a,b)=>a-b);
