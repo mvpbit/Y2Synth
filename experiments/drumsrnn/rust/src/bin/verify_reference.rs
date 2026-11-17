@@ -17,7 +17,8 @@ use y2synth_drumsrnn_weights::{
     attention::AttentionRnn,
     generation::{generate_with_observer, Sampling},
     load_checkpoint,
-    verification::{compare_probabilities, MagentaReference, DEFAULT_TOLERANCE, STEPS, CLASSES},
+    verification::{compare_probabilities, infer_teacher_forced, MagentaReference, TraceMode,
+        DEFAULT_TOLERANCE, STEPS, CLASSES},
 };
 
 struct Options {
@@ -29,7 +30,8 @@ struct Options {
 fn usage() {
     println!("Compare all 16 × 512 DrumsRNN class probabilities: Rust vs pinned Magenta.js");
     println!("Usage: cargo run --release --bin verify_reference -- --reference FILE [OPTIONS]");
-    println!("  --reference FILE    Saved JSON from experiments/drumsrnn/reference.html");
+    println!("  --reference FILE    Saved JSON from reference.html (scratch Argmax)");
+    println!("                      OR teacher-forcing.html (diagnostic forced inputs)");
     println!("                      Choose From scratch + Argmax in the browser");
     println!("  --weights DIR       Local checkpoint directory (default: experiments/drumsrnn/models/drum_kit_rnn_tfjs)");
     println!("  --tolerance N       Maximum allowed absolute error per probability (default: 1e-5)");
@@ -72,30 +74,52 @@ fn run() -> Result<(), Box<dyn Error>> {
 
     let checkpoint = load_checkpoint(&options.weights)?;
     let network = AttentionRnn::from_checkpoint(&checkpoint)?;
-    let mut probabilities = Vec::with_capacity(STEPS);
-    let pattern = generate_with_observer(
-        &network, STEPS, Sampling::Argmax, 0,
-        |step, row| {
-            if step != probabilities.len() || row.len() != CLASSES {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "Unexpected inference trace shape/order"));
-            }
-            probabilities.push(row.to_vec());
-            Ok(())
-        },
-    )?;
+    let (probabilities, predicted_classes) = match reference.mode()? {
+        TraceMode::ScratchArgmax => {
+            let mut probabilities = Vec::with_capacity(STEPS);
+            let pattern = generate_with_observer(
+                &network, STEPS, Sampling::Argmax, 0,
+                |step, row| {
+                    if step != probabilities.len() || row.len() != CLASSES {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "Unexpected inference trace shape/order",
+                        ));
+                    }
+                    probabilities.push(row.to_vec());
+                    Ok(())
+                },
+            )?;
+            (probabilities, pattern.classes)
+        }
+        TraceMode::TeacherForced => {
+            let forced = reference.forced_classes.as_deref().expect("validated above");
+            let trace = infer_teacher_forced(&network, forced)?;
+            (trace.probabilities, trace.predicted_classes)
+        }
+    };
 
     let report = compare_probabilities(
-        &reference, &probabilities, &pattern.classes, options.tolerance,
+        &reference, &probabilities, &predicted_classes, options.tolerance,
     )?;
     println!("Y2Synth DrumsRNN full-distribution numerical verification");
     println!("Reference: {}", options.reference.display());
     println!("JS: {} (backend: {})", reference.implementation,
         reference.tfjs_backend.as_deref().unwrap_or("unknown"));
     println!("Checkpoint: {}", reference.checkpoint);
-    println!("Mode: From scratch, 1 internal silent step, Argmax");
+    match reference.mode()? {
+        TraceMode::ScratchArgmax => {
+            println!("Mode: From scratch, 1 internal silent step, Argmax");
+        }
+        TraceMode::TeacherForced => {
+            println!("Mode: DIAGNOSTIC teacher forcing, one silent bootstrap then forced history");
+            println!("Forced preceding classes: {:?}", reference.forced_classes.as_ref().unwrap());
+            println!("These are fixed inputs, NOT generated output or user performance.");
+        }
+    }
     println!("Compared: {STEPS} steps × {CLASSES} classes = {} probabilities", STEPS * CLASSES);
     println!("Tolerance (absolute): {:.2e}", report.tolerance);
-    println!("Rust classes: {:?}", pattern.classes);
+    println!("Rust classes: {:?}", predicted_classes);
     println!("Magenta.js:   {:?}", reference.classes);
     println!();
     println!("step  max_abs_error  worst_class  mean_abs_error   total_variation  >tolerance");
