@@ -197,3 +197,16 @@ quit
 
 
 
+
+## Первые результаты сборки Application Controller на Mac Studio (2026-11-17)
+
+Пользователь запустил `cargo test --locked --features live-audio` после установки Rust (cargo 1.100.0). Все зависимости скачались, но **тестовая сборка завершилась E0502** в `src/application.rs`: две тестовые closure захватывали локальный счётчик `calls` по `&mut`, а затем тест проверял `calls` до прекращения mutable borrow.
+
+**Исправление внесено в `main`:** в тестах вместо `let mut calls` используется `std::cell::Cell<usize>` и методы `get/set`. Это изменение касается только тестового кода; движок, модель и аудиообработчик не менялись. **Повторный прогон cargo test после исправления ещё не подтверждён**.
+
+Повторить:
+
+```bash
+git pull --ff-only
+cargo test --locked --manifest-path experiments/drumsrnn/rust/Cargo.toml --features live-audio
+```
