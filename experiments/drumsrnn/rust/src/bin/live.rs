@@ -24,6 +24,7 @@ use y2synth_drumsrnn_weights::{
     generation::{generate, GeneratedPattern, Sampling, DRUM_PITCHES},
     kit::{pitch_by_name, DrumKit, VOICE_NAMES},
     load_checkpoint,
+    master_fx::MasterEffects,
     melody::{compose, RhythmContext},
     project::TrackId,
     realtime::RealtimePlayer,
@@ -54,6 +55,9 @@ fn usage() {
     println!("  decay <voice> <0.5..2> | reset-kit");
     println!("  synth1 pluck | synth1 pad | synth1 generate | synth1 show | synth1 clear");
     println!("  synth1 level <0..1> | synth1 note <step 0..15> <MIDI 36..96> <length 1..16>");
+    println!("  fx | fx on | fx off | fx reset");
+    println!("  fx delay on|off | fx delay steps 2 | fx delay feedback 0.4 | fx delay wet 0.25");
+    println!("  fx reverb on|off | fx reverb size 0.6 | fx reverb damping 0.45 | fx reverb wet 0.2");
     println!("  menu | center | next | prev | back | wheel-play");
     println!("  (menu commands simulate the Y2 wheel; 'play' works anywhere)");
     println!("Voices: kick snare chh ohh lowtom midtom hightom crash ride");
@@ -217,6 +221,63 @@ fn describe_result(result: AppResponse) {
     }
 }
 
+/// Pure CLI parser for a single MASTER (not per-track) FX settings change.
+fn edit_master_fx(args: &[&str], current: MasterEffects) -> Result<MasterEffects, String> {
+    let mut updated = current;
+    match args {
+        ["on"] => {
+            updated.delay.enabled = true;
+            updated.reverb.enabled = true;
+        }
+        ["off"] => {
+            updated.delay.enabled = false;
+            updated.reverb.enabled = false;
+        }
+        ["reset"] => updated = MasterEffects::default(),
+        ["delay", "on"] => updated.delay.enabled = true,
+        ["delay", "off"] => updated.delay.enabled = false,
+        ["reverb", "on"] => updated.reverb.enabled = true,
+        ["reverb", "off"] => updated.reverb.enabled = false,
+        ["delay", "steps", raw] => {
+            updated.delay.steps = raw.parse::<u8>()
+                .map_err(|_| "Expected a whole number of 1..8 steps".to_string())?;
+        }
+        ["delay", "feedback", raw] => {
+            updated.delay.feedback = raw.parse::<f32>()
+                .map_err(|_| "Expected a number for delay feedback".to_string())?;
+        }
+        ["delay", "wet", raw] => {
+            updated.delay.wet = raw.parse::<f32>()
+                .map_err(|_| "Expected a number for delay wet".to_string())?;
+        }
+        ["reverb", "size", raw] => {
+            updated.reverb.size = raw.parse::<f32>()
+                .map_err(|_| "Expected a number for reverb size".to_string())?;
+        }
+        ["reverb", "damping", raw] => {
+            updated.reverb.damping = raw.parse::<f32>()
+                .map_err(|_| "Expected a number for reverb damping".to_string())?;
+        }
+        ["reverb", "wet", raw] => {
+            updated.reverb.wet = raw.parse::<f32>()
+                .map_err(|_| "Expected a number for reverb wet".to_string())?;
+        }
+        _ => return Err("Try: fx on|off|reset, fx delay ..., fx reverb ...".into()),
+    }
+    updated.validate().map_err(|error| error.to_string())?;
+    Ok(updated)
+}
+
+fn show_master_fx(settings: MasterEffects) {
+    println!("Master FX chain: (Drums + Synth 1) -> DELAY -> REVERB -> output");
+    println!("  Delay:  {} | steps {} (16th notes) | feedback {:.2} | wet {:.2}",
+        if settings.delay.enabled { "ON " } else { "OFF" },
+        settings.delay.steps, settings.delay.feedback, settings.delay.wet);
+    println!("  Reverb: {} | size {:.2} | damping {:.2} | wet {:.2}",
+        if settings.reverb.enabled { "ON " } else { "OFF" },
+        settings.reverb.size, settings.reverb.damping, settings.reverb.wet);
+}
+
 fn show_synth1(app: &ApplicationController) {
     if let Some(track) = app.session().current().synth1() {
         let synth = &track.content;
@@ -324,7 +385,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut menu = MenuController::default();
 
     println!();
-    println!("Ready: play | stop | regenerate | synth1 generate | synth1 pluck | synth1 pad | menu | help | quit");
+    println!("Ready: play | stop | regenerate | synth1 generate | synth1 pluck | synth1 pad | fx | menu | help | quit");
     println!("Wheel simulation: center | next | prev | back | wheel-play");
     println!("DrumsRNN: neural AI; Synth 1: autonomous rule-based melodic composer.");
     println!("New loops and edits are saved in RAM, not to disk.");
@@ -375,6 +436,23 @@ fn run() -> Result<(), Box<dyn Error>> {
                     show_kit(&drums.content.kit);
                 } else {
                     println!("No drum kit loaded.");
+                }
+            }
+            ["fx"] => show_master_fx(app.session().current().master_fx()),
+            ["fx", args @ ..] => {
+                let current = app.session().current().master_fx();
+                match edit_master_fx(args, current) {
+                    Ok(updated) => {
+                        let mut audio = LiveAudio { input: &mut input, playing: &playing };
+                        match app.set_master_fx(updated, &mut audio) {
+                            Ok(()) => {
+                                println!("Master FX updated for the complete mix, saved in RAM.");
+                                show_master_fx(updated);
+                            }
+                            Err(error) => println!("Cannot apply master FX: {error}"),
+                        }
+                    }
+                    Err(error) => println!("Invalid master FX setting: {error}"),
                 }
             }
             ["synth1", "pluck"] | ["synth1", "pad"] => {
@@ -516,6 +594,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                     hits, current.bpm(), current.mode(), options.temperature, seed.get(),
                 );
                 show_synth1(&app);
+                show_master_fx(current.master_fx());
                 show_menu(&menu);
             }
             ["quit"] | ["exit"] => break,
@@ -539,6 +618,28 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn master_fx_cli_edits_are_validated_and_independent() {
+        let defaults = MasterEffects::default();
+        let changed = edit_master_fx(&["delay", "wet", "0.55"], defaults).unwrap();
+        assert_eq!(changed.delay.wet, 0.55);
+        assert_eq!(changed.reverb, defaults.reverb);
+
+        let changed = edit_master_fx(&["reverb", "size", "0.8"], changed).unwrap();
+        assert_eq!(changed.reverb.size, 0.8);
+        assert_eq!(changed.delay.wet, 0.55);
+        assert!(edit_master_fx(&["delay", "steps", "0"], changed).is_err());
+        assert!(edit_master_fx(&["delay", "feedback", "NaN"], changed).is_err());
+        assert!(edit_master_fx(&["reverb", "wet", "1.5"], changed).is_err());
+
+        let muted = edit_master_fx(&["off"], changed).unwrap();
+        assert!(!muted.delay.enabled && !muted.reverb.enabled);
+        assert_eq!(muted.delay.wet, 0.55); // bypass preserves tone settings
+        let on = edit_master_fx(&["on"], muted).unwrap();
+        assert!(on.delay.enabled && on.reverb.enabled);
+        assert_eq!(edit_master_fx(&["reset"], changed).unwrap(), defaults);
+    }
 
     #[test]
     fn tempo_validation_rejects_nan_and_out_of_range() {
