@@ -364,6 +364,10 @@ wheel-play  # Replay last saved mix, no generation
 
 The project now has a single serial **post-mix** effect chain: **Drums + Synth 1 → tempo-synced Delay → ambient Reverb → output**. `src/master_fx.rs` runs exclusively on the control/offline thread. The mixed mono PCM bar is pre-rolled through both feedback networks for 12 periods so echoes and tails can wrap naturally into the loop; nothing runs on the CPAL callback. Parameters are part of `MusicProject` and the existing RAM-only `last_saved` snapshot. Render and audio queue failures roll back the settings.
 
-Live commands: `fx` (show); `fx on`, `fx off`, `fx reset`; `fx delay on|off`, `fx delay steps 4`, `fx delay feedback 0.4`, `fx delay wet 0.25`; `fx reverb on|off`, `fx reverb size 0.6`, `fx reverb damping 0.45`, `fx reverb wet 0.2`. Delay steps are sixteenth notes, 1..8. Other ranges: feedback 0..0.75; wet 0..0.7; size/damping 0..1. Both inserts are enabled by default.
+Live commands: `fx` (show); `fx on`, `fx off`, `fx reset`; `fx delay on|off`, `fx delay steps 4`, `fx delay feedback 0.4`, `fx delay wet 0.25`; `fx reverb on|off`, `fx reverb size 0.6`, `fx reverb damping 0.45`, `fx reverb wet 0.2`. Delay steps are sixteenth notes, 1..8. Other ranges: feedback 0..0.75; wet 0..1.0; size/damping 0..1. Both inserts are enabled by default.
 
 **Status:** code and tests committed to main, but a full `cargo test --locked --features live-audio` and audition on Mac Studio still need to be confirmed. The offline pre-roll may need optimization on Y2Linux. This is a mono prototype, not a stereo production FX engine.
+
+## Master FX balance refinement (listening follow-up)
+
+The first version sounded underwhelming even at maximum. Both effects now add their wet signal in parallel with the full dry sound, instead of attenuating the dry signal as wet rises. Reverb comb injection and diffuser gain are strengthened. Both wet values accept `0..=1.0` (previously 0..=0.7). Final bar peak protection remains. Tests cover wet echo strength, stronger reverberant energy, retained dry attack, finite peak-capped output and invalid settings. **Mac compile and audition of this follow-up remain unconfirmed.**
