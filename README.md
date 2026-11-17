@@ -56,3 +56,8 @@ cargo run --release --manifest-path experiments/drumsrnn/rust/Cargo.toml \
 - [Magenta DrumsRNN research](docs/research/magenta-drumsrnn.md) — результаты исследования и численных проверок.
 
 Вся текущая разработка ведётся в ветке **`main`**.
+
+
+### Численная проверка ненулевой истории DrumsRNN
+
+В дополнение к подтверждённой сверке 8192 вероятностей на тихой Argmax-траектории добавлена **диагностическая проверка teacher forcing**: отдельная страница `experiments/drumsrnn/teacher-forcing.html` создаёт эталон Magenta.js по фиксированным **ненулевым барабанным входам**, а тот же `verify_reference` сравнивает 16 × 512 значений с Rust. **Новый эксперимент ещё не запускался на Mac**; он не изменяет обычную автономную AI-генерацию. Команды и ограничения описаны в [исследовании DrumsRNN](docs/research/magenta-drumsrnn.md).
