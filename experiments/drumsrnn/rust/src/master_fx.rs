@@ -147,8 +147,10 @@ impl AllPass {
     fn tick(&mut self, input: f32) -> f32 {
         const FEEDBACK: f32 = 0.5;
         let delayed = self.buffer[self.pos];
-        let output = delayed - input;
-        self.buffer[self.pos] = input + delayed * FEEDBACK;
+        // Canonical Schroeder all-pass: unit-magnitude diffusion stage.
+        let written = input + delayed * FEEDBACK;
+        let output = delayed - written * FEEDBACK;
+        self.buffer[self.pos] = written;
         self.pos += 1;
         if self.pos == self.buffer.len() { self.pos = 0; }
         output
