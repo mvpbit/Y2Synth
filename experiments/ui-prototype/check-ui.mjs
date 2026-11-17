@@ -36,11 +36,11 @@ assert.match(html, /GENERATE TRACK/);
 assert.match(html, /fx:\{delay:true/);
 // Click wheel hardware geometry: all controls are integrated in one ring.
 for (const id of ["wheel", "return", "prev", "next", "play", "center"]) {
-  assert.match(html, new RegExp(\`id="\${id}"\`), \`Missing click-wheel control: \${id}\`);
+  assert.match(html, new RegExp(`id="${id}"`), `Missing click-wheel control: ${id}`);
 }
 for (const id of ["back", "home", "up", "down", "left", "right"]) {
-  assert.doesNotMatch(html, new RegExp(\`id="\${id}"\`),
-    \`Old separate control must not return: \${id}\`);
+  assert.doesNotMatch(html, new RegExp(`id="${id}"`),
+    `Old separate control must not return: ${id}`);
 }
 assert.match(html, /\.wheel \{width:340px;height:340px;/);
 assert.match(html, /function startWheelGesture\(event\)/);
