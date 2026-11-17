@@ -62,7 +62,7 @@ quit
 
 Это **отдельная браузерная звуковая имитация**, не JavaScript-порт Rust, не Magenta.js DrumsRNN и не аппаратная прошивка. Задача — проверить эргономику меню и найти форму UI; браузерный запуск и качество звучания прототипа пока не подтверждены пользователем.
 
-Из корня проекта: `python3 -m http.server 8765 --bind 127.0.0.1`, затем открыть `http://127.0.0.1:8765/experiments/ui-prototype/index.html` и нажать PLAY.
+Добавлен [GitHub Actions deploy workflow](.github/workflows/pages-ui.yml): при изменениях UI в `main` он автоматически проверяет JavaScript и фиксированный размер дисплея, затем развёртывает статический HTML на GitHub Pages. **Статические проверки уже прошли PASS**, но **Pages необходимо один раз активировать**: [Settings → Pages](https://github.com/mvpbit/Y2Synth/settings/pages) → Source: **GitHub Actions**, затем [Run workflow](https://github.com/mvpbit/Y2Synth/actions/workflows/pages-ui.yml). Ожидаемый URL после успешного деплоя: `https://mvpbit.github.io/Y2Synth/` (пока не подтверждён как доступный). Локально: `python3 -m http.server 8765 --bind 127.0.0.1`, затем `http://127.0.0.1:8765/experiments/ui-prototype/index.html`.
 
 ## Что осталось
 
