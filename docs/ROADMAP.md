@@ -93,3 +93,12 @@
 ## Правило перехода
 
 Нельзя считать этап завершённым только потому, что файл появился в Git. Нужны сборка, тесты и подтверждённое выполнение на нужной платформе. Обновлять статусы и [DEVELOPMENT](DEVELOPMENT.md) после каждой такой проверки.
+
+
+### Master FX: Delay → Reverb (2026-11-17)
+
+- [x] Добавлен общий для всего проекта мастер-тракт `src/master_fx.rs`: **Drums + Synth 1 → Delay → Reverb → Audio Output**. DSP выполняется после сведения дорожек, до публикации `PreparedLoop`; CoreAudio callback не менялся.
+- [x] Tempo-sync delay (1…8 шагов по 1/16 ноты, feedback 0…0.75, wet 0…0.7), ревербератор на четырёх параллельных comb-фильтрах и двух all-pass (size/damping 0…1, wet 0…0.7), независимый bypass, default оба включены.
+- [x] Параметры `MasterEffects` входят в `MusicProject`, наследуются при генерации новых барабанов или мелодий, изменениях BPM, переключениях USER/AI и сохраняются в RAM-снимке. Изменения применяются только после успешного рендера и `AudioPort::queue_bar`.
+- [x] Live CLI: `fx`, `fx on|off|reset`, `fx delay on|off|steps|feedback|wet`, `fx reverb on|off|size|damping|wet`. Добавлены тесты DSP, метрик длины, bypass и отката состояния при ошибке аудиопорта, обработка drums-only и synth-only.
+- [ ] **Компиляция, прогоны `cargo test --locked --features live-audio`, прослушивание на Mac и отсутствие артефактов при изменении FX ещё не подтверждены.** Проверить стоимость 12 циклов pre-roll на слабом Y2Linux; это пока offline прототип, а не stateful RT effects.
