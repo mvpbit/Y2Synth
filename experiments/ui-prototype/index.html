@@ -302,9 +302,9 @@ function generateInstrument(instrument){
   state[instrument].notes=notes;
   inform("Новая партия "+instrument.toUpperCase());
 }
-function restoreDemo(track){
-  state[track].notes=demoNotes(track==="pluck"?"PLUCK":"PAD");
-  inform("Демо-партия "+(track==="pluck"?"PLUCK":"PAD")+" восстановлена");
+function restoreDemo(instrument){
+  state[instrument].notes=demoNotes(instrument);
+  inform("Демо-партия "+instrument.toUpperCase()+" восстановлена");
 }
 function go(page){state.stack.push(state.page);state.page=page;state.focus=0;render();}
 function back(){if(state.stack.length){state.page=state.stack.pop();state.focus=0;render();}else if(state.page!=="home"){state.page="home";state.focus=0;render();}}
