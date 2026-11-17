@@ -35,6 +35,7 @@
   .menu {display:grid;gap:5px;max-height:245px;overflow-y:auto;scrollbar-color:#4a675b transparent}
   .item {width:100%;display:flex;justify-content:space-between;align-items:center;text-align:left;border:1px solid transparent;border-radius:7px;background:transparent;color:var(--text);padding:7px 10px;font:inherit;cursor:pointer;min-height:36px}
   .item.selected{background:#2a4138;border-color:#70977f}
+  .item.editing{background:#4b482e;border-color:var(--accent)}
   .item small {display:block;font-size:10px;color:#91ada0;margin-top:1px}
   .item b {font-variant-numeric:tabular-nums;color:var(--accent)}
   .item:disabled{opacity:.4;cursor:not-allowed}
@@ -103,7 +104,7 @@
 const $ = (id) => document.getElementById(id);
 const out = $("screen-main");
 const state = {
-  page:"home", stack:[], focus:0, bpm:120, playing:false, playhead:0,
+  page:"home", stack:[], focus:0, editing:false, bpm:120, playing:false, paused:false, playhead:0,
   // Instrument roles are fixed: Pluck and Pad are separate named instruments.
   pluck:{level:0.67,notes:[]}, pad:{level:0.6,notes:[]},
   drums:{kick:[0,8],snare:[4,12],hat:[0,2,4,6,8,10,12,14]},
@@ -267,16 +268,26 @@ function scheduler(){
 }
 async function transport(){
   if(state.playing){
-    state.playing=false;clearInterval(audio.timer);audio.timer=null;
-    inform("STOP · хвосты эффектов затухают");
+    state.playing=false;
+    state.paused=true;
+    clearInterval(audio.timer);audio.timer=null;
+    inform("PAUSE · нажми ▶Ⅱ для продолжения");
   }else{
     try{initAudio();await audio.ctx.resume();}
     catch(error){inform("Audio: "+error.message);return;}
-    state.playing=true;audio.step=0;audio.nextTime=audio.ctx.currentTime+.065;
+    if(!state.paused)audio.step=0;
+    state.playing=true;state.paused=false;
+    audio.nextTime=audio.ctx.currentTime+.065;
     audio.timer=setInterval(scheduler,24);scheduler();
     inform("PLAY · 16 шагов");
   }
-  $("play").textContent=state.playing?"■ STOP":"▶ PLAY";
+  render();
+}
+function stopTransport(){
+  clearInterval(audio.timer);audio.timer=null;
+  state.playing=false;state.paused=false;state.playhead=0;
+  audio.step=0;
+  inform("STOP · такт сброшен");
   render();
 }
 function generateDrums(){
@@ -314,9 +325,13 @@ function restoreDemo(instrument){
   state[instrument].notes=demoNotes(instrument);
   inform("Демо-партия "+instrument.toUpperCase()+" восстановлена");
 }
-function go(page){state.stack.push(state.page);state.page=page;state.focus=0;render();}
-function back(){if(state.stack.length){state.page=state.stack.pop();state.focus=0;render();}else if(state.page!=="home"){state.page="home";state.focus=0;render();}}
-function home(){state.page="home";state.stack=[];state.focus=0;render();}
+function go(page){state.stack.push(state.page);state.page=page;state.focus=0;state.editing=false;render();}
+function back(){
+  if(state.editing){state.editing=false;inform("Редактирование завершено");render();return;}
+  if(state.stack.length){state.page=state.stack.pop();state.focus=0;render();}
+  else if(state.page!=="home"){home();}
+}
+function home(){state.page="home";state.stack=[];state.focus=0;state.editing=false;render();}
 const choices={
   settings:()=>[
     {label:"USER",sub:"Инструменты и параметры",action:()=>go("user")},
@@ -388,10 +403,19 @@ function activate(index=state.focus){
   if(state.page==="home"){go("settings");return;}
   const items=choices[state.page]?.()||[],item=items[index];
   if(!item||item.disabled)return;
+  if(state.editing && index===state.focus){
+    state.editing=false;inform("Значение принято");render();return;
+  }
+  state.editing=false;
   state.focus=index;
   if(item.action)item.action();
-  else if(item.toggle){state.fx[item.key]=!state.fx[item.key];updateFx();inform(item.label+" "+(state.fx[item.key]?"ON":"OFF"));render();}
-  else if(item.key)edit(item.key,1);
+  else if(item.toggle){
+    state.fx[item.key]=!state.fx[item.key];updateFx();
+    inform(item.label+" "+(state.fx[item.key]?"ON":"OFF"));render();
+  }else if(item.key){
+    // The ring changes a value only after pressing OK on that row.
+    state.editing=true;inform(item.label+" · вращай кольцо · OK готово");render();
+  }
 }
 function direction(delta){
   if(state.page==="home"){go("settings");return;}
@@ -404,11 +428,26 @@ function direction(delta){
   }
   state.focus=next;render();
 }
+function seekStep(delta){
+  const next=(audio.step+delta+16)%16;
+  audio.step=next;state.playhead=next;
+  inform("Шаг "+String(next+1).padStart(2,"0")+" / 16");render();
+}
 function leftRight(delta){
-  if(state.page==="home"){go("settings");return;}
+  if(state.page==="home"){seekStep(delta);return;}
   const item=(choices[state.page]?.()||[])[state.focus];
-  if(item?.key&&!item.toggle)edit(item.key,delta);
+  if(state.editing && item?.key && !item.toggle)edit(item.key,delta);
   else direction(delta);
+}
+function wheelTurn(steps){
+  const count=Math.max(-8,Math.min(8,Math.trunc(steps)));
+  if(!count)return;
+  for(let i=0;i<Math.abs(count);i++){
+    const delta=Math.sign(count);
+    const item=(choices[state.page]?.()||[])[state.focus];
+    if(state.editing && item?.key && !item.toggle)edit(item.key,delta);
+    else direction(delta);
+  }
 }
 function stepGrid(label,entries,id){
   const active=new Set(entries);
@@ -425,7 +464,7 @@ function renderHome(){
   const sound=state.playing?"ИГРАЕТ":"ГОТОВ";
   return '<div class="eyebrow">'+sound+' · QUICK PLAY</div>'+
     '<div class="huge">PLAY <span>'+ (state.playing?"◉":"▶")+'</span></div>'+
-    '<div class="sub">CENTER → настройки · Pluck + Pad · '+state.bpm+' BPM</div>'+
+    '<div class="sub">OK → настройки · Pluck + Pad · '+state.bpm+' BPM</div>'+
     '<div class="strip"><span class="chip strong">DRUMS</span><span class="chip">PLUCK</span>'+
     '<span class="chip">PAD</span><span class="chip">FX '+(state.fx.delay?"D":"–")+'/'+(state.fx.reverb?"R":"–")+'</span></div>'+
     stepGrid("KICK",state.drums.kick,"kick")+
@@ -445,11 +484,12 @@ function render(){
     const items=choices[state.page]?.()||[];
     out.innerHTML='<div class="eyebrow">'+(state.page==="fx"?"DELAY → REVERB":state.page==="ai"?"COMPOSITION":state.page.toUpperCase())+'</div>'+
       '<div class="menu">'+items.map((item,i)=>
-        '<button class="item '+(state.focus===i?"selected":"")+'" data-index="'+i+'" '+(item.disabled?"disabled":"")+'>'+
+        '<button class="item '+(state.focus===i?"selected ":"")+(state.focus===i&&state.editing?"editing":"")+'" data-index="'+i+'" '+(item.disabled?"disabled":"")+'>'+
         '<span>'+item.label+(item.sub?'<small>'+item.sub+'</small>':"")+'</span>'+
         '<b>'+(item.value??(item.disabled?"—":"›"))+'</b></button>'
       ).join('')+'</div>'+
-      (state.page==="fx"?'<div class="notice">◀ ▶ регулируют · SELECT переключает ON/OFF</div>':
+      (state.editing?'<div class="notice">◉ Вращай кольцо, OK — принять значение</div>':
+       state.page==="fx"?'<div class="notice">Крути кольцо · OK — выбрать / изменить</div>':
        state.page==="tempo"?'<div class="notice">40–240 BPM · изменение слышно со следующего шага</div>':
        state.page==="ai"?'<div class="notice">Браузерная генерация не использует Magenta / Rust</div>':"");
     const active=out.querySelector(".item.selected");
