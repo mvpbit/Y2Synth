@@ -27,6 +27,7 @@ use y2synth_drumsrnn_weights::{
     project::TrackId,
     realtime::RealtimePlayer,
     sequencer::PreparedLoop,
+    synth1::{NoteEvent, SynthPreset, SynthTrack},
     ui::{Command as MenuCommand, InputEvent, MenuController, Screen},
 };
 
@@ -50,6 +51,8 @@ fn usage() {
     println!("  play | stop | bpm <40..240> | regenerate | status | quit");
     println!("  kit | level <voice> <0..1.5> | tone <voice> <0..1>");
     println!("  decay <voice> <0.5..2> | reset-kit");
+    println!("  synth1 pluck | synth1 pad | synth1 show | synth1 clear");
+    println!("  synth1 level <0..1> | synth1 note <step 0..15> <MIDI 36..96> <length 1..16>");
     println!("  menu | center | next | prev | back | wheel-play");
     println!("  (menu commands simulate the Y2 wheel; 'play' works anywhere)");
     println!("Voices: kick snare chh ohh lowtom midtom hightom crash ride");
@@ -198,8 +201,26 @@ fn describe_result(result: AppResponse) {
         AppResponse::EditDrums => {
             println!("Drums editor: kit | level kick 0.5 | tone snare 0.8 | decay chh 1.5");
         }
+        AppResponse::EditSynth1 => {
+            println!("Synth 1 USER editor: synth1 pluck | synth1 pad | synth1 show");
+            println!("  synth1 level 0.7 | synth1 note 0 60 2 | synth1 clear");
+        }
         AppResponse::NotImplemented(feature) => println!("Not available yet: {feature}"),
-        AppResponse::NothingSaved => println!("No saved drum project to play."),
+        AppResponse::NothingSaved => println!("No saved music project to play."),
+    }
+}
+
+fn show_synth1(app: &ApplicationController) {
+    if let Some(track) = app.session().current().synth1() {
+        let synth = &track.content;
+        println!("Synth 1: {} | level {:.2} | {} notes | source {:?}",
+            synth.preset.name(), synth.level, synth.notes.len(), track.source);
+        for note in &synth.notes {
+            println!("  step {:>2}: MIDI {:>3}, length {:>2}, velocity {:.2}",
+                note.step, note.pitch, note.length_steps, note.velocity);
+        }
+    } else {
+        println!("Synth 1 is empty. Use 'synth1 pluck' or 'synth1 pad'.");
     }
 }
 
@@ -286,7 +307,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut menu = MenuController::default();
 
     println!();
-    println!("Ready. Enter: play | stop | regenerate | bpm 120 | kit | menu | help | quit");
+    println!("Ready. Enter: play | stop | regenerate | bpm 120 | kit | synth1 pluck | synth1 pad | menu | help | quit");
     println!("Wheel simulation: center | next | prev | back | wheel-play");
     println!("New AI loops and user kit edits are saved in RAM, not to disk.");
     let stdin = io::stdin();
@@ -336,6 +357,77 @@ fn run() -> Result<(), Box<dyn Error>> {
                     show_kit(&drums.content.kit);
                 } else {
                     println!("No drum kit loaded.");
+                }
+            }
+            ["synth1", "pluck"] | ["synth1", "pad"] => {
+                let preset = if words[1] == "pluck" {
+                    SynthPreset::Pluck
+                } else {
+                    SynthPreset::Pad
+                };
+                let synth = SynthTrack::demo(preset);
+                let mut audio = LiveAudio { input: &mut input, playing: &playing };
+                app.set_synth1(synth, &mut audio)?;
+                println!("Synth 1: {} melodic phrase queued for next bar; saved in RAM.",
+                    preset.name());
+                show_synth1(&app);
+            }
+            ["synth1", "show"] => show_synth1(&app),
+            ["synth1", "clear"] => {
+                if let Some(existing) = app.session().current().synth1() {
+                    let mut empty = existing.content.clone();
+                    empty.notes.clear();
+                    let mut audio = LiveAudio { input: &mut input, playing: &playing };
+                    app.set_synth1(empty, &mut audio)?;
+                    println!("Synth 1 notes cleared; drums remain unchanged.");
+                } else {
+                    println!("Synth 1 is already empty.");
+                }
+            }
+            ["synth1", "level", raw] => {
+                if let (Some(existing), Ok(level)) = (
+                    app.session().current().synth1(), raw.parse::<f32>(),
+                ) {
+                    let mut edited = existing.content.clone();
+                    edited.level = level;
+                    if let Err(err) = edited.validate() {
+                        println!("Invalid Synth 1 level: {err}");
+                    } else {
+                        let mut audio = LiveAudio { input: &mut input, playing: &playing };
+                        app.set_synth1(edited, &mut audio)?;
+                        println!("Synth 1 level {level:.2} queued and saved in RAM.");
+                    }
+                } else {
+                    println!("Choose 'synth1 pluck'/'synth1 pad' first, then level 0..1.");
+                }
+            }
+            ["synth1", "note", step, pitch, length] => {
+                match (
+                    step.parse::<usize>(),
+                    pitch.parse::<u8>(),
+                    length.parse::<usize>(),
+                ) {
+                    (Ok(step), Ok(pitch), Ok(length_steps)) => {
+                        let note = NoteEvent {
+                            step, pitch, length_steps, velocity: 0.75,
+                        };
+                        if let Err(error) = note.validate() {
+                            println!("Invalid note: {error}");
+                        } else if let Some(existing) = app.session().current().synth1() {
+                            let mut synth = existing.content.clone();
+                            synth.notes.push(note);
+                            if let Err(error) = synth.validate() {
+                                println!("Cannot add note: {error}");
+                            } else {
+                                let mut audio = LiveAudio { input: &mut input, playing: &playing };
+                                app.set_synth1(synth, &mut audio)?;
+                                println!("Synth 1 note added; new mixed bar queued.");
+                            }
+                        } else {
+                            println!("Choose 'synth1 pluck' or 'synth1 pad' first.");
+                        }
+                    }
+                    _ => println!("Syntax: synth1 note <step 0..15> <MIDI 36..96> <length 1..16>"),
                 }
             }
             ["reset-kit"] => {
@@ -394,6 +486,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                     "Saved project: {} drum hits, {} BPM, mode {:?}, temperature {}, seed {}.",
                     hits, current.bpm(), current.mode(), options.temperature, seed.get(),
                 );
+                show_synth1(&app);
                 show_menu(&menu);
             }
             ["quit"] | ["exit"] => break,
