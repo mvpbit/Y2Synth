@@ -37,7 +37,7 @@ jobs:
           touch _site/.nojekyll
 
       - name: Configure GitHub Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
 
       - name: Upload Y2Synth UI site
         uses: actions/upload-pages-artifact@v4
