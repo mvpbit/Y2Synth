@@ -1,0 +1,49 @@
+name: Publish Y2Synth UI Lab (480x360)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'experiments/ui-prototype/**'
+      - '.github/workflows/pages-ui.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: y2synth-ui-pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      - name: Validate native 480x360 UI and JavaScript
+        run: node experiments/ui-prototype/check-ui.mjs
+
+      - name: Assemble static Pages site
+        run: |
+          mkdir -p _site
+          cp experiments/ui-prototype/index.html _site/index.html
+          touch _site/.nojekyll
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Y2Synth UI site
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
