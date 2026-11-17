@@ -295,15 +295,17 @@ mod tests {
 
     #[test]
     fn refuses_malformed_shape_and_unnormalized_distribution() {
-        let mut reference = reference();
-        reference.probabilities[15].pop();
-        assert!(reference.validate().is_err());
-        let mut reference = reference();
-        reference.probabilities[2][0] = 0.5;
-        assert!(reference.validate().is_err());
-        let mut reference = reference();
-        reference.classes.truncate(15);
-        assert!(reference.validate().is_err());
+        let mut malformed = reference();
+        malformed.probabilities[15].pop();
+        assert!(malformed.validate().is_err());
+
+        let mut unnormalized = reference();
+        unnormalized.probabilities[2][0] = 0.5;
+        assert!(unnormalized.validate().is_err());
+
+        let mut wrong_length = reference();
+        wrong_length.classes.truncate(15);
+        assert!(wrong_length.validate().is_err());
     }
 
     #[test]
