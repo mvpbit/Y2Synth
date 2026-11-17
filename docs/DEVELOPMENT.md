@@ -268,3 +268,32 @@ cargo run --release --locked --manifest-path experiments/drumsrnn/rust/Cargo.tom
 
 **Следующий уровень уверенности:** принудительно подать в обе реализации одну и ту же **ненулевую** последовательность предыдущих барабанных классов (teacher-forcing) и сравнить все 512 вероятностей по шагам. Это не меняет требование к пользовательскому режиму — музыка по-прежнему должна генерироваться автономно; ненулевая последовательность нужна исключительно для диагностического теста.
 
+
+
+## Диагностическая сверка с ненулевыми входами: teacher forcing (2026-11-17)
+
+К уже проверенной Argmax-сверке `16 × 512` на тихой траектории добавлена независимая **ненулевая** траектория — отдельный режим для исследований, а не новая возможность пользовательской генерации.
+
+- `experiments/drumsrnn/teacher-forcing.html`: эталонная Magenta.js `@magenta/music@1.23.1`; повторно вызывает `continueSequenceAndReturnProbabilities(prefix, 1)` для 16 префиксов с первым тихим шагом и фиксированными барабанными классами `[5,4,0,6,2,4,8,1,5,20,2,64,4,3,17]`.
+- `src/verification.rs::infer_teacher_forced`: тот же нулевой bootstrap и 15 принудительных предыдущих классов, собранные в 16 полноразмерных softmax-распределений. Никаких изменений в `generation.rs`, `ui.rs`, `application.rs` или аудиопути.
+- `src/bin/verify_reference.rs`: автоматически выбирает `scratch_argmax` или `teacher_forced` по полю `traceMode`; старые JSON совместимы. Эталонный JSON содержит `forcedClassIds`, `sampledClassIds`, 16 × 512 `probabilities`.
+- Валидация отклоняет отсутствие forced IDs, нулевую полностью последовательность, неправильную длину (ожидается 15), невалидные классы (`>=512`) или неверные метаданные. Тесты на обратную совместимость старого эталона добавлены.
+
+**Статус:** новый код записан в `main`, **не скомпилирован и не проверен с реальным Magenta.js эталоном на Mac Studio**. Прошлый PASS на тихой траектории остаётся подтверждённым. Следующая пользовательская проверка:
+
+```bash
+git pull --ff-only
+cargo test --locked --manifest-path experiments/drumsrnn/rust/Cargo.toml
+python3 -m http.server 8765 --bind 127.0.0.1
+```
+
+Открыть `http://127.0.0.1:8765/experiments/drumsrnn/teacher-forcing.html`, нажать **Generate 16 × 512 reference**, затем **Save JSON**. В отдельном терминале выполнить:
+
+```bash
+cargo run --release --locked \
+  --manifest-path experiments/drumsrnn/rust/Cargo.toml \
+  --bin verify_reference -- \
+  --reference "$HOME/Downloads/drumsrnn-teacher-forced.json"
+```
+
+Не отмечать новый ненулевой эксперимент как PASS до лога сравнения. Если максимальная ошибка выходит за `1e-5`, изучить её по конкретным шагам и классам, прежде чем менять порог или реализацию.
