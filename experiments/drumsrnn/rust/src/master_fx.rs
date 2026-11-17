@@ -20,6 +20,8 @@ pub struct DelaySettings {
     /// Sixteenth-note units. 2 = eighth note, 4 = quarter note.
     pub steps: u8,
     pub feedback: f32,
+    /// Parallel echo send (0 = bypass, 1 = equally strong first repeat).
+    /// The direct sound is retained; feedback repeats are controlled separately.
     pub wet: f32,
 }
 
@@ -36,6 +38,8 @@ pub struct ReverbSettings {
     pub size: f32,
     /// Controls high-frequency damping in the feedback loops (0..=1).
     pub damping: f32,
+    /// Parallel reverb send (0 = dry, 1 = very spacious). Does not
+    /// replace the direct sound with the quieter diffuse response.
     pub wet: f32,
 }
 
@@ -69,8 +73,8 @@ impl MasterEffects {
         if !delay.feedback.is_finite() || !(0.0..=0.75).contains(&delay.feedback) {
             return Err(invalid("Delay feedback must be finite and in 0..=0.75"));
         }
-        if !delay.wet.is_finite() || !(0.0..=0.7).contains(&delay.wet) {
-            return Err(invalid("Delay wet must be finite and in 0..=0.7"));
+        if !delay.wet.is_finite() || !(0.0..=1.0).contains(&delay.wet) {
+            return Err(invalid("Delay wet must be finite and in 0..=1"));
         }
         if !reverb.size.is_finite() || !(0.0..=1.0).contains(&reverb.size) {
             return Err(invalid("Reverb size must be finite and in 0..=1"));
@@ -78,8 +82,8 @@ impl MasterEffects {
         if !reverb.damping.is_finite() || !(0.0..=1.0).contains(&reverb.damping) {
             return Err(invalid("Reverb damping must be finite and in 0..=1"));
         }
-        if !reverb.wet.is_finite() || !(0.0..=0.7).contains(&reverb.wet) {
-            return Err(invalid("Reverb wet must be finite and in 0..=0.7"));
+        if !reverb.wet.is_finite() || !(0.0..=1.0).contains(&reverb.wet) {
+            return Err(invalid("Reverb wet must be finite and in 0..=1"));
         }
         Ok(())
     }
@@ -109,7 +113,9 @@ impl DelayLine {
         self.samples[self.position] = dry + self.feedback * echo;
         self.position += 1;
         if self.position == self.samples.len() { self.position = 0; }
-        dry * (1.0 - self.wet) + echo * self.wet
+        // Use a parallel send: the old crossfade attenuated attacks as the
+        // user increased wet, making even high settings feel underwhelming.
+        dry + echo * self.wet
     }
 }
 
@@ -127,7 +133,9 @@ impl Comb {
     fn tick(&mut self, input: f32, feedback: f32, damping: f32) -> f32 {
         let delayed = self.buffer[self.pos];
         self.lowpass = delayed * (1.0 - damping) + self.lowpass * damping;
-        self.buffer[self.pos] = input * 0.3 + self.lowpass * feedback;
+        // The previous input * 0.3 made the diffuse reflections much
+        // quieter than the dry feed, even when wet was at its maximum.
+        self.buffer[self.pos] = input * 0.8 + self.lowpass * feedback;
         self.pos += 1;
         if self.pos == self.buffer.len() { self.pos = 0; }
         delayed
@@ -189,11 +197,13 @@ impl Reverb {
         for comb in &mut self.combs {
             diffuse += comb.tick(dry, self.feedback, self.damping);
         }
-        diffuse *= 0.25;
+        diffuse *= 0.5;
         for allpass in &mut self.allpasses {
             diffuse = allpass.tick(diffuse);
         }
-        dry * (1.0 - self.wet) + diffuse * self.wet
+        // Retain the original attack and blend in a meaningful ambience.
+        // The bounded final-bar peak guard prevents clipped master output.
+        dry + diffuse * (self.wet * 1.15)
     }
 }
 
@@ -283,11 +293,12 @@ mod tests {
         fx.delay.wet = 0.5;
         fx.delay.feedback = 0.0;
         let mut input = vec![0.0; 16_000];
-        input[0] = 1.0;
+        input[0] = 0.4;
         let output = render_master_bar(&input, 120.0, 8_000, fx).unwrap();
         // Two sixteenth notes = 250 ms at 120 BPM = 2000 samples.
-        assert!((output[0] - 0.5).abs() < 1e-6);
-        assert!((output[2000] - 0.5).abs() < 1e-6);
+        // True send leaves the direct hit intact, adds a separate echo.
+        assert!((output[0] - 0.4).abs() < 1e-6);
+        assert!((output[2000] - 0.2).abs() < 1e-6);
         assert_eq!(output[1999], 0.0);
         assert_eq!(output[4000], 0.0);
     }
@@ -337,6 +348,62 @@ mod tests {
     }
 
     #[test]
+    fn more_delay_wet_makes_echo_stronger_without_muting_direct_sound() {
+        let mut fx = MasterEffects::dry();
+        fx.delay.enabled = true;
+        fx.delay.steps = 4; // Quarter note at 120 BPM = 4000 samples
+        fx.delay.feedback = 0.0;
+        fx.delay.wet = 0.2;
+        let mut input = vec![0.0; 16_000];
+        input[0] = 0.3;
+        let subtle = render_master_bar(&input, 120.0, 8_000, fx).unwrap();
+        fx.delay.wet = 1.0;
+        let strong = render_master_bar(&input, 120.0, 8_000, fx).unwrap();
+
+        assert!((subtle[0] - 0.3).abs() < 1e-6);
+        assert!((strong[0] - 0.3).abs() < 1e-6);
+        assert!((subtle[4000] - 0.06).abs() < 1e-6);
+        assert!((strong[4000] - 0.3).abs() < 1e-6);
+        assert!(strong[4000] > subtle[4000] * 4.9);
+    }
+
+    #[test]
+    fn more_reverb_wet_increases_tail_instead_of_muting_its_source() {
+        let mut fx = MasterEffects::dry();
+        fx.reverb.enabled = true;
+        fx.reverb.wet = 0.2;
+        let mut input = vec![0.0; 16_000];
+        input[0] = 0.25;
+        let subtle = render_master_bar(&input, 120.0, 8_000, fx).unwrap();
+        fx.reverb.wet = 1.0;
+        let strong = render_master_bar(&input, 120.0, 8_000, fx).unwrap();
+
+        let tail_energy = |samples: &[f32]| -> f64 {
+            samples[100..8000].iter()
+                .map(|value| f64::from(*value) * f64::from(*value))
+                .sum()
+        };
+        assert!(tail_energy(&subtle) > 0.0);
+        assert!(tail_energy(&strong) > tail_energy(&subtle) * 10.0);
+        assert!((strong[0] - 0.25).abs() < 0.01);
+    }
+
+    #[test]
+    fn extreme_wet_and_feedback_remain_finite_with_peak_protection() {
+        let mut fx = MasterEffects::default();
+        fx.delay.feedback = 0.75;
+        fx.delay.wet = 1.0;
+        fx.reverb.size = 1.0;
+        fx.reverb.damping = 1.0;
+        fx.reverb.wet = 1.0;
+        let mut input = vec![0.0; 16_000];
+        for sample in &mut input { *sample = 0.8; }
+        let output = render_master_bar(&input, 120.0, 8_000, fx).unwrap();
+        assert!(output.iter().all(|x| x.is_finite() && x.abs() <= 0.851));
+        assert!(output.iter().any(|x| x.abs() > 0.01));
+    }
+
+    #[test]
     fn invalid_parameters_rejected_including_when_disabled() {
         let mut fx = MasterEffects::dry();
         fx.delay.feedback = f32::NAN;
@@ -346,6 +413,12 @@ mod tests {
         assert!(fx.validate().is_err());
         fx.delay.steps = 2;
         fx.reverb.size = f32::INFINITY;
+        assert!(fx.validate().is_err());
+        fx.reverb.size = 0.6;
+        fx.delay.wet = 1.01;
+        assert!(fx.validate().is_err());
+        fx.delay.wet = 0.25;
+        fx.reverb.wet = 1.01;
         assert!(fx.validate().is_err());
         assert!(render_master_bar(&[], 120.0, 8_000, MasterEffects::dry()).is_err());
         assert!(render_master_bar(&[f32::NAN], 120.0, 8_000, MasterEffects::dry()).is_err());
