@@ -4,6 +4,9 @@
 //! and audio backend. It deliberately does not implement filesystem persistence,
 //! a synth engine, or AI for synth tracks.
 
+use crate::master_fx::MasterEffects;
+use std::io;
+
 /// Which track to edit or regenerate. The UI knows this enum, not the DSP.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrackId {
@@ -58,6 +61,7 @@ impl<T> Track<T> {
 pub struct MusicProject<Synth1, Synth2, Drums> {
     mode: CreationMode,
     bpm: f32,
+    master_fx: MasterEffects,
     synth1: Option<Track<Synth1>>,
     synth2: Option<Track<Synth2>>,
     drums: Option<Track<Drums>>,
@@ -76,6 +80,7 @@ impl<Synth1, Synth2, Drums> Default for MusicProject<Synth1, Synth2, Drums> {
         Self {
             mode: CreationMode::User,
             bpm: 120.0,
+            master_fx: MasterEffects::default(),
             synth1: None,
             synth2: None,
             drums: None,
@@ -90,6 +95,18 @@ impl<Synth1, Synth2, Drums> MusicProject<Synth1, Synth2, Drums> {
 
     pub fn bpm(&self) -> f32 {
         self.bpm
+    }
+
+    /// Project-wide insert chain: all mixed voices -> delay -> reverb.
+    /// Independent of the source (USER/AI) of any individual track.
+    pub fn master_fx(&self) -> MasterEffects {
+        self.master_fx
+    }
+
+    pub fn set_master_fx(&mut self, effects: MasterEffects) -> io::Result<()> {
+        effects.validate()?;
+        self.master_fx = effects;
+        Ok(())
     }
 
     /// Shared tempo of all three tracks. A saved project includes this value.
@@ -251,6 +268,33 @@ mod tests {
             assert!(session.current_mut().set_bpm(bpm).is_err());
         }
         assert_eq!(session.current().bpm(), 160.0);
+    }
+
+    #[test]
+    fn master_effects_are_project_wide_saved_and_validated() {
+        let mut session: MusicSession<String, (), Vec<u8>> = MusicSession::default();
+        assert!(session.current().master_fx().delay.enabled);
+        assert!(session.current().master_fx().reverb.enabled);
+        session.current_mut().replace_synth1("lead".into(), CreationMode::User);
+        session.current_mut().replace_drums(vec![36], CreationMode::Ai);
+
+        let mut effects = session.current().master_fx();
+        effects.delay.steps = 4;
+        effects.delay.wet = 0.4;
+        effects.reverb.size = 0.9;
+        session.current_mut().set_master_fx(effects).unwrap();
+        session.save_current();
+
+        let mut changed = effects;
+        changed.delay.wet = 0.0;
+        session.current_mut().set_master_fx(changed).unwrap();
+        assert_eq!(session.last_saved().unwrap().master_fx(), effects);
+        assert_eq!(session.current().synth1().unwrap().source, CreationMode::User);
+        assert_eq!(session.current().drums().unwrap().source, CreationMode::Ai);
+
+        changed.reverb.size = f32::NAN;
+        assert!(session.current_mut().set_master_fx(changed).is_err());
+        assert_eq!(session.current().master_fx().delay.wet, 0.0);
     }
 
     #[test]
