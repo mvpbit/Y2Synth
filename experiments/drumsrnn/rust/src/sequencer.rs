@@ -10,6 +10,7 @@
 use crate::audio::render_samples_with_kit_at_rate;
 use crate::generation::GeneratedPattern;
 use crate::kit::DrumKit;
+use crate::synth1::{render_bar as render_synth1_bar, SynthTrack};
 use std::io::{self, ErrorKind};
 
 const STEPS_PER_BAR: usize = 16;
@@ -71,6 +72,49 @@ pub fn prepare_loop_with_kit(
         samples, bpm, sample_rate,
     })
 }
+
+
+/// Prepare a complete bar for the mixed project, preserving the old drums-only
+/// renderer and its output when Synth 1 is not present. Each melodic tail is
+/// folded into the loop in synth1::render_bar. DSP is done on the control thread.
+pub fn prepare_project_loop(
+    drums: Option<(&GeneratedPattern, &DrumKit)>,
+    synth1: Option<&SynthTrack>,
+    bpm: f32,
+    sample_rate: u32,
+) -> io::Result<PreparedLoop> {
+    if drums.is_none() && synth1.is_none() {
+        return Err(invalid("Cannot render a project with no tracks"));
+    }
+    let drum_bar = drums.map(|(pattern, kit)| {
+        prepare_loop_with_kit(pattern, bpm, sample_rate, kit)
+    }).transpose()?;
+    let synth_bar = synth1.map(|track| {
+        render_synth1_bar(track, bpm, sample_rate)
+    }).transpose()?;
+
+    match (drum_bar, synth_bar) {
+        (Some(drums), None) => Ok(drums), // Preserve existing sound and tests.
+        (None, Some(samples)) => Ok(PreparedLoop { samples, bpm, sample_rate }),
+        (Some(mut drums), Some(synth)) => {
+            if drums.samples.len() != synth.len() {
+                return Err(invalid("Drums/Synth 1 rendered different bar lengths"));
+            }
+            // Deliberate instrument balance before global peak protection:
+            // keep drums present, while leaving headroom for pad chords.
+            for (a, b) in drums.samples.iter_mut().zip(synth) {
+                *a = *a * 0.82 + b * 0.74;
+            }
+            let peak = drums.samples.iter().fold(0.0_f32, |p, &x| p.max(x.abs()));
+            if peak > 0.85 {
+                for x in &mut drums.samples { *x *= 0.85 / peak; }
+            }
+            Ok(drums)
+        }
+        (None, None) => unreachable!("empty project rejected above"),
+    }
+}
+
 
 
 #[cfg(test)]
@@ -136,6 +180,33 @@ mod tests {
         assert_eq!(baseline.samples.len(), edited.samples.len());
         assert_ne!(baseline.samples, edited.samples);
         assert!(edited.samples.iter().all(|x| x.is_finite()));
+    }
+
+    #[test]
+    fn project_mix_includes_both_instruments_without_changing_duration() {
+        use crate::synth1::{SynthPreset, SynthTrack};
+        let kit = DrumKit::default();
+        let pluck = SynthTrack::demo(SynthPreset::Pluck);
+        let drums_only = prepare_loop_with_kit(&pattern(), 120.0, 8_000, &kit).unwrap();
+        let synth_only = prepare_project_loop(None, Some(&pluck), 120.0, 8_000).unwrap();
+        let mixed = prepare_project_loop(
+            Some((&pattern(), &kit)), Some(&pluck), 120.0, 8_000,
+        ).unwrap();
+        assert_eq!(drums_only.samples.len(), 16_000);
+        assert_eq!(synth_only.samples.len(), 16_000);
+        assert_eq!(mixed.samples.len(), 16_000);
+        assert_ne!(mixed.samples, drums_only.samples);
+        assert_ne!(mixed.samples, synth_only.samples);
+        assert!(mixed.samples.iter().all(|v| v.is_finite() && v.abs() <= 0.851));
+    }
+
+    #[test]
+    fn drums_without_synth_keep_previous_rendering() {
+        let kit = DrumKit::default();
+        let original = prepare_loop_with_kit(&pattern(), 92.0, 8_000, &kit).unwrap();
+        let new = prepare_project_loop(Some((&pattern(), &kit)), None, 92.0, 8_000).unwrap();
+        assert_eq!(original.samples, new.samples);
+        assert!(prepare_project_loop(None, None, 120.0, 8_000).is_err());
     }
 
     #[test]
