@@ -4,13 +4,14 @@
 //! executes operations, prepares a complete PCM bar and publishes it through
 //! AudioPort; the real-time callback remains independent.
 //!
-//! Only the DRUMS AI generator exists today. Synth1/Synth2 and Generate All
-//! return explicit 'not implemented' outcomes without mutating any track.
+//! The DRUMS AI generator and USER Synth 1 (Pluck/Pad) exist today.
+//! Synth 2, AI for synths and Generate All remain explicitly unimplemented.
 
 use crate::generation::GeneratedPattern;
 use crate::kit::DrumKit;
-use crate::project::{CreationMode, MusicSession, TrackId};
-use crate::sequencer::{prepare_loop_with_kit, PreparedLoop};
+use crate::project::{CreationMode, MusicProject, MusicSession, TrackId};
+use crate::sequencer::{prepare_project_loop, PreparedLoop};
+use crate::synth1::SynthTrack;
 use crate::ui::Command;
 use std::io;
 
@@ -25,7 +26,8 @@ pub struct DrumTrack {
     pub kit: DrumKit,
 }
 
-pub type AppSession = MusicSession<UnavailableSynth, UnavailableSynth, DrumTrack>;
+pub type AppProject = MusicProject<SynthTrack, UnavailableSynth, DrumTrack>;
+pub type AppSession = MusicSession<SynthTrack, UnavailableSynth, DrumTrack>;
 
 /// A port for any platform's non-RT output handoff. Implementation lives
 /// in the live application, not in the portable coordinator.
@@ -52,8 +54,10 @@ pub enum AppResponse {
     PlayingLast { mode: CreationMode, bpm: f32 },
     /// A new drum pattern was queued for the next bar (or immediately if stopped).
     DrumGenerated { hits: usize },
-    /// Drum editor exists only as the current CLI's kit controls.
+    /// Drum editor exists as kit controls in the CLI.
     EditDrums,
+    /// First USER synthesizer: Pluck/Pad and note editor on the control thread.
+    EditSynth1,
     NotImplemented(&'static str),
     NothingSaved,
 }
@@ -77,6 +81,13 @@ impl ApplicationController {
         &self.session
     }
 
+    fn prepare_project(&self, project: &AppProject) -> io::Result<PreparedLoop> {
+        let drums = project.drums()
+            .map(|track| (&track.content.pattern, &track.content.kit));
+        let synth1 = project.synth1().map(|track| &track.content);
+        prepare_project_loop(drums, synth1, project.bpm(), self.sample_rate)
+    }
+
     /// The initial drum pattern is already AI-generated on the control thread.
     /// Start-up prepares audio and saves a RAM snapshot; it does NOT auto-play.
     pub fn install_initial_drums<A: AudioPort>(
@@ -85,13 +96,11 @@ impl ApplicationController {
         kit: DrumKit,
         audio: &mut A,
     ) -> io::Result<()> {
-        let bar = prepare_loop_with_kit(
-            &pattern, self.session.current().bpm(), self.sample_rate, &kit,
-        )?;
+        let mut proposed = self.session.current().clone();
+        proposed.replace_drums(DrumTrack { pattern, kit }, CreationMode::Ai);
+        let bar = self.prepare_project(&proposed)?;
         audio.queue_bar(bar)?;
-        self.session.current_mut().replace_drums(
-            DrumTrack { pattern, kit }, CreationMode::Ai,
-        );
+        *self.session.current_mut() = proposed;
         self.session.save_current();
         Ok(())
     }
@@ -109,12 +118,10 @@ impl ApplicationController {
                 let Some(saved) = self.session.last_saved() else {
                     return Ok(AppResponse::NothingSaved);
                 };
-                let Some(drums) = saved.drums() else {
+                if !saved.has_content() {
                     return Ok(AppResponse::NothingSaved);
-                };
-                let bar = prepare_loop_with_kit(
-                    &drums.content.pattern, saved.bpm(), self.sample_rate, &drums.content.kit,
-                )?;
+                }
+                let bar = self.prepare_project(saved)?;
                 audio.queue_bar(bar)?;
                 audio.start()?;
                 Ok(AppResponse::PlayingLast { mode: saved.mode(), bpm: saved.bpm() })
@@ -126,13 +133,11 @@ impl ApplicationController {
                     .unwrap_or_default();
                 let pattern = generator.generate_drums()?;
                 let hits = pattern.hits.len();
-                let bar = prepare_loop_with_kit(
-                    &pattern, self.session.current().bpm(), self.sample_rate, &kit,
-                )?;
+                let mut proposed = self.session.current().clone();
+                proposed.replace_drums(DrumTrack { pattern, kit }, CreationMode::Ai);
+                let bar = self.prepare_project(&proposed)?;
                 audio.queue_bar(bar)?;
-                self.session.current_mut().replace_drums(
-                    DrumTrack { pattern, kit }, CreationMode::Ai,
-                );
+                *self.session.current_mut() = proposed;
                 self.session.save_current();
                 Ok(AppResponse::DrumGenerated { hits })
             }
@@ -143,35 +148,31 @@ impl ApplicationController {
                 Ok(AppResponse::NotImplemented("AI synth generator not implemented"))
             }
             Command::EditUserTrack(TrackId::Drums) => Ok(AppResponse::EditDrums),
-            Command::EditUserTrack(TrackId::Synth1 | TrackId::Synth2) => {
-                Ok(AppResponse::NotImplemented("Synth editor not implemented"))
+            Command::EditUserTrack(TrackId::Synth1) => Ok(AppResponse::EditSynth1),
+            Command::EditUserTrack(TrackId::Synth2) => {
+                Ok(AppResponse::NotImplemented("Synth 2 editor not implemented"))
             }
         }
     }
 
     /// Change common BPM without regenerating AI or touching the callback.
-    /// The tempo and RAM snapshot change only after the PCM queue accepts it.
+    /// Drums and Synth 1 are re-rendered together; saved state changes only
+    /// after the entire mixed bar has been accepted by AudioPort.
     pub fn set_bpm<A: AudioPort>(&mut self, bpm: f32, audio: &mut A) -> io::Result<()> {
-        // Check without mutating the current project.
-        if !bpm.is_finite() || !(40.0..=240.0).contains(&bpm) {
-            return Err(invalid("BPM must be finite and in 40..=240"));
-        }
-        if let Some(drums) = self.session.current().drums() {
-            let bar = prepare_loop_with_kit(
-                &drums.content.pattern, bpm, self.sample_rate, &drums.content.kit,
-            )?;
+        let mut proposed = self.session.current().clone();
+        proposed.set_bpm(bpm).map_err(invalid)?;
+        if proposed.has_content() {
+            let bar = self.prepare_project(&proposed)?;
             audio.queue_bar(bar)?;
         }
-        self.session.current_mut().set_bpm(bpm).map_err(invalid)?;
+        *self.session.current_mut() = proposed;
         if self.session.current().has_content() {
             self.session.save_current();
         }
         Ok(())
     }
 
-    /// Re-render the current drum pattern with a user-edited kit.
-    /// User edit changes the most recent project mode to USER, as recorded by
-    /// MusicProject; track contents are preserved.
+    /// Preserve the drum pattern and any Synth 1 notes while editing the kit.
     pub fn set_drum_kit<A: AudioPort>(
         &mut self,
         kit: DrumKit,
@@ -180,16 +181,35 @@ impl ApplicationController {
         let Some(existing) = self.session.current().drums() else {
             return Ok(false);
         };
-        let bar = prepare_loop_with_kit(
-            &existing.content.pattern, self.session.current().bpm(), self.sample_rate, &kit,
-        )?;
+        let mut changed = existing.content.clone();
+        changed.kit = kit;
+        let mut proposed = self.session.current().clone();
+        proposed.replace_drums(changed, CreationMode::User);
+        let bar = self.prepare_project(&proposed)?;
         audio.queue_bar(bar)?;
-        let mut updated = existing.content.clone();
-        updated.kit = kit;
-        self.session.current_mut().replace_drums(updated, CreationMode::User);
+        *self.session.current_mut() = proposed;
         self.session.save_current();
         Ok(true)
     }
+
+    /// Create or edit the USER Synth 1 instrument and notes. The AI drum track
+    /// is not regenerated or lost, and queue failures leave both snapshots
+    /// unchanged. This is the only synth editor implemented at present.
+    pub fn set_synth1<A: AudioPort>(
+        &mut self,
+        synth: SynthTrack,
+        audio: &mut A,
+    ) -> io::Result<()> {
+        synth.validate()?;
+        let mut proposed = self.session.current().clone();
+        proposed.replace_synth1(synth, CreationMode::User);
+        let bar = self.prepare_project(&proposed)?;
+        audio.queue_bar(bar)?;
+        *self.session.current_mut() = proposed;
+        self.session.save_current();
+        Ok(())
+    }
+
 }
 
 fn invalid(message: &'static str) -> io::Error {
@@ -289,7 +309,7 @@ mod tests {
             Command::GenerateAll,
             Command::GenerateTrack(TrackId::Synth1),
             Command::GenerateTrack(TrackId::Synth2),
-            Command::EditUserTrack(TrackId::Synth1),
+            Command::EditUserTrack(TrackId::Synth2),
         ] {
             assert!(matches!(app.dispatch(command, &mut generator, &mut audio).unwrap(),
                 AppResponse::NotImplemented(_)));
@@ -382,6 +402,83 @@ mod tests {
         );
         assert_eq!(calls.get(), 1); // PLAY is replay, not regeneration
         assert_eq!(audio.starts, 1);
+    }
+
+    #[test]
+    fn user_synth1_presets_mix_with_drums_and_play_saved_snapshot() {
+        use crate::synth1::{SynthPreset, SynthTrack};
+        let mut app = ApplicationController::new(8_000, 120.0).unwrap();
+        let mut audio = TestAudio::default();
+        app.install_initial_drums(pattern(36), DrumKit::default(), &mut audio).unwrap();
+        let previous_drums = app.session().current().drums().unwrap().content.pattern.classes.clone();
+        let drums_only = audio.queued.last().unwrap().samples.clone();
+
+        assert_eq!(app.dispatch(
+            Command::EditUserTrack(TrackId::Synth1),
+            &mut || -> io::Result<GeneratedPattern> { panic!("no AI needed") },
+            &mut audio,
+        ).unwrap(), AppResponse::EditSynth1);
+        let pluck = SynthTrack::demo(SynthPreset::Pluck);
+        app.set_synth1(pluck.clone(), &mut audio).unwrap();
+        assert_eq!(audio.queued.last().unwrap().samples.len(), 16_000);
+        assert_ne!(audio.queued.last().unwrap().samples, drums_only);
+        assert_eq!(app.session().current().drums().unwrap().content.pattern.classes, previous_drums);
+        assert_eq!(app.session().last_saved().unwrap().synth1().unwrap().content, pluck);
+
+        let pad = SynthTrack::demo(SynthPreset::Pad);
+        app.set_synth1(pad.clone(), &mut audio).unwrap();
+        let pad_bar = audio.queued.last().unwrap().samples.clone();
+        assert_ne!(pad_bar, drums_only);
+        app.dispatch(
+            Command::PlayLast,
+            &mut || -> io::Result<GeneratedPattern> { panic!("PLAY must not generate") },
+            &mut audio,
+        ).unwrap();
+        assert_eq!(audio.queued.last().unwrap().samples, pad_bar);
+        assert_eq!(app.session().last_saved().unwrap().synth1().unwrap().content, pad);
+        assert_eq!(audio.starts, 1);
+    }
+
+    #[test]
+    fn synth1_survives_drums_regeneration_bpm_and_kit_edits() {
+        use crate::synth1::{SynthPreset, SynthTrack};
+        let mut app = ApplicationController::new(8_000, 120.0).unwrap();
+        let mut audio = TestAudio::default();
+        app.install_initial_drums(pattern(36), DrumKit::default(), &mut audio).unwrap();
+        let synth = SynthTrack::demo(SynthPreset::Pad);
+        app.set_synth1(synth.clone(), &mut audio).unwrap();
+        app.set_bpm(90.0, &mut audio).unwrap();
+        assert_eq!(audio.queued.last().unwrap().samples.len(), 21_333);
+        let mut kit = DrumKit::default();
+        kit.set(36, "tone", 0.7).unwrap();
+        app.set_drum_kit(kit, &mut audio).unwrap();
+        app.dispatch(
+            Command::GenerateTrack(TrackId::Drums),
+            &mut || Ok(pattern(38)),
+            &mut audio,
+        ).unwrap();
+        assert_eq!(app.session().last_saved().unwrap().synth1().unwrap().content, synth);
+        assert_eq!(app.session().last_saved().unwrap().drums().unwrap().content.pattern.hits[0].pitch, 38);
+        assert_eq!(app.session().last_saved().unwrap().bpm(), 90.0);
+    }
+
+    #[test]
+    fn synth1_invalid_settings_and_closed_audio_do_not_change_project() {
+        use crate::synth1::{SynthPreset, SynthTrack};
+        let mut app = ApplicationController::new(8_000, 120.0).unwrap();
+        let mut audio = TestAudio::default();
+        app.install_initial_drums(pattern(36), DrumKit::default(), &mut audio).unwrap();
+        let old_queued = audio.queued.len();
+        let mut broken = SynthTrack::demo(SynthPreset::Pluck);
+        broken.level = f32::NAN;
+        assert!(app.set_synth1(broken, &mut audio).is_err());
+        assert_eq!(audio.queued.len(), old_queued);
+        assert!(app.session().current().synth1().is_none());
+
+        audio.reject_queue = true;
+        assert!(app.set_synth1(SynthTrack::demo(SynthPreset::Pluck), &mut audio).is_err());
+        assert!(app.session().last_saved().unwrap().synth1().is_none());
+        assert!(app.session().current().synth1().is_none());
     }
 
     #[test]
