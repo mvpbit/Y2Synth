@@ -412,3 +412,43 @@ wheel-play  # Replay last saved mix, no generation
 ```
 
 При запуске зафиксировать реальный результат компиляции/тестов, слышимый Pluck/Pad, сохранность Drums при повторной генерации Synth 1, отсутствие нежелательных щелчков на границе такта. При возникновении Rust ошибок — исправить по фактическому логу. Веса DrumsRNN нужны для текущего `live` CLI; сама функция `compose` не требует checkpoint.
+
+
+## Общая мастер-цепочка Delay → Reverb (2026-11-17)
+
+**Приоритет пользователя:** эффекты общие на весь микс, а не по одному на каждом голосе/дорожке. Евклидовы последовательности отложены ради master FX.
+
+Переносимый `src/master_fx.rs` реализует два последовательных эффекта: **(Drums + Synth 1 + будущий Synth 2) → Delay → Reverb → Output**. Delay синхронизирован с BPM (`steps` в 1/16 нотах: 1…8, `feedback` 0…0.75, `wet` 0…0.7). Reverb: четыре comb + два all-pass фильтра (`size` и `damping` 0…1, `wet` 0…0.7). Оба по умолчанию включены; `fx off` отключает оба, не сбрасывая численные настройки. При bypass звук проходит без изменения. Эффекты **моно**, поскольку текущий `PreparedLoop` моно. Стерео и stateful RT processing не заявлены.
+
+Полный такт сперва создаётся в `prepare_project_loop`; затем `ApplicationController::prepare_project` применяет общий `render_master_bar`. Для непрерывных хвостов внутри зацикленного такта выполняется **12 проходов pre-roll** с обратными связями вне audio callback, публикуется итоговый периодический PCM-буфер. При смене FX, BPM, нот, паттернов или кита формируется целый новый бар на control thread. Реальный callback в `realtime.rs` по-прежнему лишь читает `PreparedLoop` и делает короткий crossfade.
+
+`MusicProject.master_fx` хранит единые настройки независимо от дорожек; `ApplicationController::set_master_fx` валидирует диапазоны и применяет их только после успешной публикации. Ошибки не меняют текущую музыку и `last_saved`. Тесты DSP и app покрывают воспроизведение dry/wet, drums-only и synth-only, изменение BPM, сохранение снимка и rollback.
+
+В `live` (вводить после запуска программы в `y2>`):
+
+```text
+play
+synth1 pad
+fx
+fx off
+fx on
+fx delay steps 4
+fx delay feedback 0.35
+fx delay wet 0.3
+fx reverb size 0.8
+fx reverb damping 0.5
+fx reverb wet 0.35
+fx reset
+stop
+```
+
+**Статус:** код закоммичен в `main`, но **новую сборку и прослушивание на Mac после внедрения master FX ещё не подтверждали**. Команда проверки из корня репозитория:
+
+```bash
+git pull --ff-only
+cargo test --locked --manifest-path experiments/drumsrnn/rust/Cargo.toml --features live-audio
+cargo run --release --locked --manifest-path experiments/drumsrnn/rust/Cargo.toml \\
+  --features live-audio --bin live -- --bpm 120 --temperature 1.2
+```
+
+После запуска проверить на слух оба эффекта как с Drums-only, так и с Drums+Synth, ощутимость синхронизации на разном BPM, `fx off/on`, артефакты на переходах. На Y2Linux оценить нагрузку от offline pre-roll и память; не считать RT-safe или production FX без измерений.
