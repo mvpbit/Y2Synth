@@ -220,7 +220,7 @@ function hitDrum(voice,time){
 }
 function playInstrumentNote(note,time,instrument){
   const base=440*Math.pow(2,(note.pitch-69)/12),stepDuration=60/state.bpm/4;
-  const vel=state[instrument].level,gate=note.len*stepDuration;
+  const vel=state[instrument].level*(note.velocity??1),gate=note.len*stepDuration;
   if(instrument==="pluck"){
     [1,2,3].forEach((harm,i)=>{
       tone(base*harm,time,Math.min(1.2,.25+gate*.48)/(1+i*.22),
@@ -233,7 +233,7 @@ function playInstrumentNote(note,time,instrument){
         const ctx=audio.ctx,osc=ctx.createOscillator(),env=ctx.createGain();
         osc.type="sine";osc.frequency.value=base*detune*harm;
         const vol=vel*[.064,.026,.01][i];
-        const release=.7,attack=.3;
+        const release=.7,attack=Math.min(.3,gate*.45);
         env.gain.setValueAtTime(.0001,time);
         env.gain.linearRampToValueAtTime(vol,time+attack);
         env.gain.setValueAtTime(vol,time+gate);
@@ -293,36 +293,133 @@ function stopTransport(){
   inform("STOP · bar reset");
   render();
 }
+// Procedural browser composer, not a trained model. Keep both independent
+// tracks in C natural minor, including the original demo phrases.
+const MINOR_SCALE=[0,2,3,5,7,8,10];
+const recentPatterns={pluck:[],pad:[],drums:[]};
+const choose=(items)=>items[Math.floor(Math.random()*items.length)];
+function weighted(items,weight){
+  let target=Math.random()*items.reduce((sum,item)=>sum+weight(item),0);
+  for(const item of items){target-=weight(item);if(target<0)return item;}
+  return items[items.length-1];
+}
+function sampleSteps(count,candidates,weight){
+  const pool=[...candidates],result=[];
+  while(result.length<count && pool.length){
+    const step=weighted(pool,weight);
+    result.push(step);pool.splice(pool.indexOf(step),1);
+  }
+  return result.sort((a,b)=>a-b);
+}
+function minorPitch(degree,base=48){
+  return base+12*Math.floor(degree/7)+MINOR_SCALE[((degree%7)+7)%7];
+}
+function freshPattern(track,build,signature){
+  let pattern,key;
+  // Bounded retries: no unbounded work, even with a pathological RNG.
+  for(let attempt=0;attempt<12;attempt++){
+    pattern=build();key=signature(pattern);
+    if(!recentPatterns[track].includes(key))break;
+  }
+  recentPatterns[track].push(key);
+  if(recentPatterns[track].length>8)recentPatterns[track].shift();
+  return pattern;
+}
+function composeDrums(){
+  const style=choose(["straight","broken","half-time","sparse"]);
+  const busy=.2+Math.random()*.65;
+  const kick=sampleSteps(style==="straight"?4:choose([2,3,4,5,6]),
+    Array.from({length:16},(_,i)=>i),
+    step=>step===0?12:style==="straight"&&step%4===0?8:step%2===0?2:busy);
+  const snare=style==="half-time"?[8]:style==="sparse"?[choose([4,8,12])]:[4,12];
+  for(let step=0;step<16;step++){
+    // Displaced backbeats and occasional fills, not a fixed [4,12] forever.
+    if(!snare.includes(step)&&Math.random()<(step>=12?busy*.22:busy*.06))snare.push(step);
+  }
+  if(style==="broken"&&Math.random()<.6){
+    const at=snare.indexOf(12);
+    if(at>=0)snare[at]=choose([11,13,14]);
+  }
+  const hat=sampleSteps(choose([4,6,8,10,12,14]),
+    Array.from({length:16},(_,i)=>i),
+    step=>step%2===0?3:busy*2);
+  return {kick,snare:[...new Set(snare)].sort((a,b)=>a-b),hat};
+}
 function generateDrums(){
-  const kick=[0,8],snare=[4,12],hat=[];
-  for(const step of [2,3,6,7,10,11,14,15])if(Math.random()<.38)kick.push(step);
-  for(let step=0;step<16;step+=2)if(Math.random()<.92)hat.push(step);
-  for(const step of [3,7,11,15])if(Math.random()<.25)hat.push(step);
-  state.drums={kick,snare,hat};
-  inform("New algorithmic rhythm (not DrumsRNN)");
+  state.drums=freshPattern("drums",composeDrums,pattern=>JSON.stringify(pattern));
+  inform("New rhythm · "+state.drums.kick.length+" kicks · "+state.drums.hat.length+" hats");
+}
+function composePad(){
+  const count=choose([1,2,2,3,3,4]);
+  const starts=[0,...sampleSteps(count-1,[2,4,6,8,10,12,14],
+    step=>step%4===0?3:1)];
+  const notes=[];
+  let lastDegree=-1,previousCenter=60;
+  starts.forEach((step,index)=>{
+    // Diatonic triads, sevenths, add9 and suspended voicings.
+    const degree=choose([0,2,3,4,5,6].filter(value=>value!==lastDegree));
+    lastDegree=degree;
+    const shape=choose([[0,2,4],[0,2,4,6],[0,2,4,8],[0,3,4]]);
+    const inversion=choose([0,1,2]);
+    const pitches=shape.map((offset,i)=>minorPitch(degree+offset)+(i<inversion?12:0))
+      .sort((a,b)=>a-b);
+    // Choose a register near the previous chord, then sometimes open a voice.
+    const center=pitches.reduce((sum,pitch)=>sum+pitch,0)/pitches.length;
+    if(center-previousCenter>7 && pitches[0]>=60)pitches.forEach((_,i)=>pitches[i]-=12);
+    if(Math.random()<.35 && pitches[pitches.length-1]<=72)pitches[pitches.length-1]+=12;
+    previousCenter=pitches.reduce((sum,pitch)=>sum+pitch,0)/pitches.length;
+    const span=(starts[index+1]??16)-step;
+    const len=Math.max(2,span-(span>2&&Math.random()<.3?1:0));
+    const velocity=.65+Math.random()*.3;
+    pitches.forEach(pitch=>notes.push({step,pitch,len,velocity}));
+  });
+  return notes;
+}
+function padPitchClasses(step){
+  const active=state.pad.notes.filter(note=>note.step<=step && step<note.step+note.len);
+  return new Set(active.map(note=>note.pitch%12));
+}
+function composePluck(){
+  const count=choose([4,5,6,7,8,9,10,11,12]);
+  const syncopation=choose([.3,.8,1.8,3]);
+  const phase=choose([0,1,2,3]);
+  const slots=sampleSteps(count,Array.from({length:16},(_,i)=>i),
+    step=>step%4===phase?3:step%2?syncopation:1.5);
+  const register=choose([55,60,65]);
+  const palette=Array.from({length:30},(_,i)=>i+55)
+    .filter(pitch=>MINOR_SCALE.includes(pitch%12));
+  const motion=choose(["rise","fall","arch","walk","arp"]);
+  const motif=Array.from({length:choose([3,4,5])},()=>choose([-2,-1,0,1,2,3]));
+  let previous=register+choose([0,3,7]);
+  return slots.map((step,index)=>{
+    const chords=padPitchClasses(step);
+    const anchor=index===0 || step%4===0 || index===slots.length-1;
+    const candidates=anchor&&chords.size?palette.filter(pitch=>chords.has(pitch%12)):palette;
+    let target=previous;
+    if(motion==="rise")target=register+index;
+    else if(motion==="fall")target=register+12-index;
+    else if(motion==="arch")target=register+12*Math.sin(Math.PI*index/(count-1));
+    else if(motion==="arp")target=register+[0,7,12,3][index%4];
+    else target=previous+motif[index%motif.length]*2;
+    const pitch=weighted(candidates,pitch=>{
+      const distance=Math.abs(pitch-target);
+      const repeat=pitch===previous?.3:1;
+      return repeat/(1+distance*distance*.35);
+    });
+    previous=pitch;
+    const room=(slots[index+1]??16)-step;
+    const len=Math.min(room,choose([1,1,2,2,3,4]));
+    const velocity=Math.min(1,(step%4===0?.85:.58)+Math.random()*.18);
+    return {step,pitch,len,velocity};
+  });
 }
 function generateInstrument(instrument){
-  const roots=[48,50,52,53,55,57],root=roots[Math.floor(Math.random()*roots.length)];
-  const motion=[8,5,10][Math.floor(Math.random()*3)];
-  const chords=[[0,3,7,10],[motion,motion+4,motion+7,motion+11]];
-  const notes=[];
-  if(instrument==="pluck"){
-    const slots=[0,2+Math.floor(Math.random()*2),5+Math.floor(Math.random()*2),7,
-                 8,10+Math.floor(Math.random()*2),13+Math.floor(Math.random()*2),15];
-    const motif=[0,1+Math.floor(Math.random()*3),2,1];
-    slots.forEach((step,i)=>{
-      let pitch=root+12+chords[Math.floor(step/8)][motif[i%4]];
-      pitch=Math.min(96,pitch);
-      notes.push({step,pitch,len:1+(i%3)});
-    });
-  }else{
-    for(let half=0;half<2;half++)
-      chords[half].forEach((interval,i)=>notes.push({
-        step:half*8,pitch:root+interval+(i?12:0),len:8
-      }));
-  }
-  state[instrument].notes=notes;
-  inform("New pattern: "+instrument.toUpperCase());
+  const build=instrument==="pluck"?composePluck:composePad;
+  // Ignore velocity and absolute transposition when spotting recent repeats.
+  state[instrument].notes=freshPattern(instrument,build,notes=>
+    notes.map(note=>[note.step,note.pitch-notes[0].pitch,note.len].join(":")).join("|"));
+  const events=new Set(state[instrument].notes.map(note=>note.step)).size;
+  inform(instrument.toUpperCase()+" · "+events+(instrument==="pad"?" chords":" notes")+" · C minor");
 }
 function restoreDemo(instrument){
   state[instrument].notes=demoNotes(instrument);

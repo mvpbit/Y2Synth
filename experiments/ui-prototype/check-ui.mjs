@@ -119,6 +119,123 @@ restoreDemo("pluck");
 if (state.pluck.notes.length !== 6 || state.pluck.notes.some(note => note.len === 8)) {
   throw new Error("Pluck demo restore did not restore melody");
 }
+// Reproducible diversity + musical bounds: hundreds of patterns, not just
+// different random transpositions of one fixed rhythm.
+const generationReport=[];
+const originalRandom=Math.random;
+for(const seed of [1,42,20261118,0xffffffff]){
+  let randomState=seed;
+  Math.random=()=>{randomState=(Math.imul(randomState,1664525)+1013904223)>>>0;return randomState/4294967296;};
+  const pluckRhythms=new Set(),pluckCounts=new Set(),contours=new Set();
+  const padRhythms=new Set(),padCounts=new Set(),voicings=new Set(),snares=new Set();
+  const fxBefore=JSON.stringify(state.fx),tempoBefore=state.bpm;
+  const drumSignatures=new Set(),lengths=new Set(),velocities=new Set();
+  for(let iteration=0;iteration<128;iteration++){
+    for(const track of ["pad","pluck","drums"]){
+      const others=JSON.stringify(["pluck","pad","drums"].filter(key=>key!==track).map(key=>state[key]));
+      if(track==="drums")generateDrums();else generateInstrument(track);
+      if(JSON.stringify(["pluck","pad","drums"].filter(key=>key!==track).map(key=>state[key]))!==others){
+        throw new Error("Generation changed another track: "+track);
+      }
+    }
+    for(const track of ["pluck","pad"]){
+      const notes=state[track].notes;
+      if(!notes.length)throw new Error("Empty generated instrument");
+      const unique=new Set();
+      let previousStep=-1;
+      for(const note of notes){
+        if(!Number.isInteger(note.step)||note.step<0||note.step>15||
+           !Number.isInteger(note.len)||note.len<1||note.step+note.len>16||
+           !Number.isInteger(note.pitch)||note.pitch<48||note.pitch>84||
+           ![0,2,3,5,7,8,10].includes(note.pitch%12)||
+           !Number.isFinite(note.velocity)||note.velocity<.4||note.velocity>1){
+          throw new Error("Invalid generated note: "+JSON.stringify(note));
+        }
+        if(note.step<previousStep)throw new Error("Unsorted generated notes");
+        previousStep=note.step;
+        const id=note.step+":"+note.pitch;
+        if(unique.has(id))throw new Error("Duplicate generated note");
+        unique.add(id);
+        lengths.add(note.len);velocities.add(note.velocity.toFixed(2));
+      }
+      const starts=[...new Set(notes.map(note=>note.step))];
+      if(track==="pluck"){
+        if(starts.length!==notes.length||notes.length<4||notes.length>12)throw new Error("Pluck density");
+        notes.forEach((note,i)=>{
+          if(i+1<notes.length&&note.step+note.len>notes[i+1].step)throw new Error("Pluck gate overlap");
+        });
+        pluckRhythms.add(starts.join(","));pluckCounts.add(notes.length);
+        contours.add(notes.map(note=>note.pitch-notes[0].pitch).join(","));
+      }else{
+        if(starts.length<1||starts.length>4||starts[0]!==0)throw new Error("Pad chord count");
+        for(const step of starts){
+          const chord=notes.filter(note=>note.step===step);
+          if(chord.length<3||chord.length>4||new Set(chord.map(note=>note.len)).size!==1)throw new Error("Malformed chord");
+        }
+        padRhythms.add(starts.join(","));padCounts.add(starts.length);
+        voicings.add(notes.map(note=>note.pitch-notes[0].pitch).join(","));
+      }
+    }
+    for(const hits of Object.values(state.drums)){
+      if(!hits.length||new Set(hits).size!==hits.length||hits.some((step,i)=>!Number.isInteger(step)||step<0||step>15||(i&&step<=hits[i-1]))){
+        throw new Error("Invalid drum pattern");
+      }
+    }
+    drumSignatures.add(JSON.stringify(state.drums));
+    snares.add(state.drums.snare.join(","));
+  }
+  if(pluckRhythms.size<80||pluckCounts.size<7||contours.size<80||
+     padRhythms.size<20||padCounts.size!==4||voicings.size<60||
+     snares.size<20||drumSignatures.size<100||lengths.size<6||velocities.size<20){
+    throw new Error("Generator diversity regressed for seed "+seed);
+  }
+  if(JSON.stringify(state.fx)!==fxBefore||state.bpm!==tempoBefore)throw new Error("Generation changed FX or tempo");
+  generationReport.push({seed,pluckRhythms:pluckRhythms.size,padRhythms:padRhythms.size,
+    contours:contours.size,voicings:voicings.size,snarePatterns:snares.size,drumPatterns:drumSignatures.size});
+}
+// Rejection sampling must be bounded even when random values never change.
+Math.random=()=>0;
+for(let i=0;i<10;i++){generateInstrument("pad");generateInstrument("pluck");generateDrums();}
+Math.random=originalRandom;
+restoreDemo("pluck");restoreDemo("pad");
+// Exercise real note scheduling with silent test doubles. Short Pad gates at
+// high BPM must not put the sustain event before the end of the attack.
+const envelopes=[];
+audio.mix={};
+audio.ctx={
+  createOscillator(){return {type:"",frequency:{value:0,setValueAtTime(){}},
+    connect(){return this;},start(){},stop(){}};},
+  createGain(){
+    const events=[];
+    envelopes.push(events);
+    const record=(value,time)=>events.push({value,time});
+    return {gain:{setValueAtTime:record,linearRampToValueAtTime:record,
+      exponentialRampToValueAtTime:record},connect(){return this;}};
+  }
+};
+for(const bpm of [40,120,240]){
+  state.bpm=bpm;
+  for(const instrument of ["pluck","pad"]){
+    for(const len of [1,2,8,16])playInstrumentNote({pitch:60,len,velocity:.7},1,instrument);
+  }
+}
+for(const events of envelopes){
+  if(events.some((event,i)=>!Number.isFinite(event.value)||event.value<=0||
+      !Number.isFinite(event.time)||(i&&event.time<events[i-1].time))){
+    throw new Error("Invalid audio envelope timing");
+  }
+}
+for(const instrument of ["pluck","pad"]){
+  envelopes.length=0;
+  playInstrumentNote({pitch:60,len:2,velocity:1},1,instrument);
+  const loud=Math.max(...envelopes[0].map(event=>event.value));
+  envelopes.length=0;
+  playInstrumentNote({pitch:60,len:2,velocity:.5},1,instrument);
+  const soft=Math.max(...envelopes[0].map(event=>event.value));
+  if(Math.abs(soft/loud-.5)>.00001)throw new Error("Velocity not applied: "+instrument);
+}
+audio.ctx=null;state.bpm=120;
+
 // Menu movement, value edit mode and round-the-ring gestures are independent.
 home();
 wheelTurn(1);
@@ -161,4 +278,4 @@ if (state.playing || state.paused || state.playhead !== 0 || audio.step !== 0) {
   throw new Error("Long-press STOP must reset playhead and transport");
 }
 `, { document, window: {}, setTimeout() {}, clearInterval() {} });
-console.log("OK: Y2 480×360, native click-wheel buttons/rotations, BPM edit mode, transport and independent Pluck/Pad.");
+console.log("OK: Y2 480×360, native click-wheel buttons/rotations, BPM edit mode, transport, independent Pluck/Pad, seeded pattern diversity and audio envelopes.");
