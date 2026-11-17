@@ -199,6 +199,7 @@ fn invalid(message: &'static str) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
     use crate::generation::DrumHit;
     use crate::ui::Command;
 
@@ -262,18 +263,18 @@ mod tests {
         let mut app = ApplicationController::new(8_000, 120.0).unwrap();
         let mut audio = TestAudio::default();
         app.install_initial_drums(pattern(36), DrumKit::default(), &mut audio).unwrap();
-        let mut calls = 0usize;
+        let calls = Cell::new(0usize);
         let mut generator = || -> io::Result<GeneratedPattern> {
-            calls += 1;
+            calls.set(calls.get() + 1);
             Ok(pattern(38))
         };
         assert_eq!(app.dispatch(Command::GenerateTrack(TrackId::Drums), &mut generator, &mut audio).unwrap(),
             AppResponse::DrumGenerated { hits: 1 });
-        assert_eq!(calls, 1);
+        assert_eq!(calls.get(), 1);
         assert_eq!(app.session().last_saved().unwrap().drums().unwrap().content.pattern.hits[0].pitch, 38);
         assert_eq!(app.dispatch(Command::PlayLast, &mut generator, &mut audio).unwrap(),
             AppResponse::PlayingLast { mode: CreationMode::Ai, bpm: 120.0 });
-        assert_eq!(calls, 1);
+        assert_eq!(calls.get(), 1);
         assert_eq!(audio.starts, 1);
         assert_eq!(audio.queued.len(), 3);
     }
@@ -349,9 +350,9 @@ mod tests {
         let mut app = ApplicationController::new(8_000, 120.0).unwrap();
         let mut audio = TestAudio::default();
         app.install_initial_drums(pattern(36), DrumKit::default(), &mut audio).unwrap();
-        let mut calls = 0usize;
+        let calls = Cell::new(0usize);
         let mut generator = || -> io::Result<GeneratedPattern> {
-            calls += 1;
+            calls.set(calls.get() + 1);
             Ok(pattern(42))
         };
 
@@ -368,7 +369,7 @@ mod tests {
             app.dispatch(command, &mut generator, &mut audio).unwrap(),
             AppResponse::DrumGenerated { hits: 1 },
         );
-        assert_eq!(calls, 1);
+        assert_eq!(calls.get(), 1);
         assert_eq!(app.session().last_saved().unwrap().drums().unwrap().content.pattern.hits[0].pitch, 42);
 
         menu.handle(InputEvent::BackPressed);     // AI menu
@@ -379,7 +380,7 @@ mod tests {
             app.dispatch(play, &mut generator, &mut audio).unwrap(),
             AppResponse::PlayingLast { mode: CreationMode::Ai, bpm: 120.0 }
         );
-        assert_eq!(calls, 1); // PLAY is replay, not regeneration
+        assert_eq!(calls.get(), 1); // PLAY is replay, not regeneration
         assert_eq!(audio.starts, 1);
     }
 
