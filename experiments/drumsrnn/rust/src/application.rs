@@ -463,6 +463,29 @@ mod tests {
     }
 
     #[test]
+    fn synth1_can_play_alone_without_drum_pattern_or_ai() {
+        use crate::synth1::{SynthPreset, SynthTrack};
+        let mut app = ApplicationController::new(8_000, 120.0).unwrap();
+        let mut audio = TestAudio::default();
+        let mut muted = SynthTrack::demo(SynthPreset::Pluck);
+        muted.level = 0.85;
+        app.set_synth1(muted.clone(), &mut audio).unwrap();
+        assert!(app.session().current().drums().is_none());
+        assert_eq!(app.session().last_saved().unwrap().synth1().unwrap().content, muted);
+        assert_eq!(audio.queued.len(), 1);
+        assert!(audio.queued[0].samples.iter().any(|x| x.abs() > 0.01));
+        let mut generator = || -> io::Result<GeneratedPattern> {
+            panic!("Synth-only PLAY must never run DrumsRNN")
+        };
+        assert_eq!(
+            app.dispatch(Command::PlayLast, &mut generator, &mut audio).unwrap(),
+            AppResponse::PlayingLast { mode: CreationMode::User, bpm: 120.0 },
+        );
+        assert_eq!(audio.starts, 1);
+        assert_eq!(audio.queued[0].samples, audio.queued[1].samples);
+    }
+
+    #[test]
     fn synth1_invalid_settings_and_closed_audio_do_not_change_project() {
         use crate::synth1::{SynthPreset, SynthTrack};
         let mut app = ApplicationController::new(8_000, 120.0).unwrap();
