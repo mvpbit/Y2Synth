@@ -3,21 +3,21 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Y2Synth — browser interface prototype</title>
+<title>Y2Synth — Native 480 × 360 UI Lab</title>
 <style>
   :root {color-scheme:dark;--bg:#171b1b;--case:#343b3c;--screen:#101c1b;--text:#e1ece2;--muted:#82958e;--accent:#dfb96b;--accent2:#83c9b2;--line:#3b514b}
-  * {box-sizing:border-box} body {margin:0;min-height:100vh;background:radial-gradient(ellipse at 50% 0,#303735 0%,#161a1a 65%);font:14px/1.45 system-ui,-apple-system,sans-serif;color:var(--text);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:22px 14px}
-  header {width:min(100%,540px);display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:15px}
+  * {box-sizing:border-box} body {min-width:560px;margin:0;min-height:100vh;background:radial-gradient(ellipse at 50% 0,#303735 0%,#161a1a 65%);font:14px/1.45 system-ui,-apple-system,sans-serif;color:var(--text);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:22px 14px}
+  header {width:530px;display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:15px}
   header .brand {font-weight:800;font-size:20px;letter-spacing:-.08em} header .brand b{font-size:13px;font-weight:500;letter-spacing:.18em;color:var(--accent);margin-left:8px}
   header .caption {color:#a0ada8;font-size:11px;text-align:right}
-  .device {width:min(100%,540px);background:linear-gradient(145deg,#3b4544,#222929);border:1px solid #5b6763;border-radius:30px;padding:24px;box-shadow:0 24px 80px #0009,inset 0 2px 2px #ffffff14}
+  .device {width:530px;background:linear-gradient(145deg,#3b4544,#222929);border:1px solid #5b6763;border-radius:30px;padding:24px;box-shadow:0 24px 80px #0009,inset 0 2px 2px #ffffff14}
   .device-head {display:flex;justify-content:space-between;color:#cad0cb;letter-spacing:.23em;font-size:11px;margin:0 5px 12px;font-weight:700}
   .speaker {width:48px;height:7px;display:block;background:repeating-linear-gradient(90deg,#0b1110 0px,#0b1110 3px,transparent 3px,transparent 6px);border-radius:9px}
-  .screen {min-height:315px;border:7px solid #101514;border-radius:16px;overflow:hidden;background:linear-gradient(165deg,#142521,#0b1615);box-shadow:inset 0 0 25px #0008,0 0 0 1px #68756b}
-  .screen-head {padding:13px 16px 10px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #30413b;font-size:11px;color:var(--accent2);letter-spacing:.1em}
+  .screen {width:480px;height:360px;min-width:480px;min-height:360px;max-width:480px;max-height:360px;display:flex;flex-direction:column;flex:none;border:0;border-radius:9px;overflow:hidden;background:linear-gradient(165deg,#142521,#0b1615);box-shadow:inset 0 0 25px #0008,0 0 0 7px #101514,0 0 0 8px #68756b}
+  .screen-head {height:36px;flex:0 0 36px;padding:8px 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #30413b;font-size:11px;color:var(--accent2);letter-spacing:.1em}
   .screen-head .right{color:var(--muted);font-variant-numeric:tabular-nums}
-  #screen-main {padding:12px 15px;min-height:239px}
-  .screen-foot {min-height:33px;border-top:1px solid #2a3c36;padding:8px 14px;display:flex;justify-content:space-between;color:#87a097;font-size:10px;gap:8px}
+  #screen-main {height:292px;flex:0 0 292px;min-height:0;overflow:hidden;padding:10px 15px}
+  .screen-foot {height:32px;flex:0 0 32px;border-top:1px solid #2a3c36;padding:7px 14px;display:flex;justify-content:space-between;color:#87a097;font-size:10px;gap:8px}
   .eyebrow {text-transform:uppercase;letter-spacing:.2em;color:var(--accent);font-size:10px;font-weight:700;margin-bottom:2px}
   .huge {font-size:42px;line-height:1.1;letter-spacing:-.05em;font-weight:750;margin:5px 0 8px}
   .huge span{color:var(--accent)}
@@ -32,7 +32,7 @@
   .beat.on {background:#71c8aa;border-color:#a4ddc8}.beat.synth.on{background:#dfb96b;border-color:#f0dca9}
   .beat.head{outline:1px solid #fff;outline-offset:1px}
   .beat:nth-child(4n+1){border-left:2px solid #62796c}
-  .menu {display:grid;gap:5px;max-height:219px;overflow-y:auto;scrollbar-color:#4a675b transparent}
+  .menu {display:grid;gap:5px;max-height:245px;overflow-y:auto;scrollbar-color:#4a675b transparent}
   .item {width:100%;display:flex;justify-content:space-between;align-items:center;text-align:left;border:1px solid transparent;border-radius:7px;background:transparent;color:var(--text);padding:7px 10px;font:inherit;cursor:pointer;min-height:36px}
   .item.selected{background:#2a4138;border-color:#70977f}
   .item small {display:block;font-size:10px;color:#91ada0;margin-top:1px}
@@ -50,23 +50,24 @@
   .wheel button:hover{color:var(--accent)}.wheel .up{top:4px;left:65px;width:50px;height:39px}.wheel .down{bottom:4px;left:65px;width:50px;height:39px}
   .wheel .left{top:66px;left:2px;width:44px;height:48px}.wheel .right{top:66px;right:2px;width:44px;height:48px}
   .wheel .center{width:83px;height:83px;top:48px;left:48px;background:radial-gradient(circle at 30% 25%,#e1e6dd,#9cab9e);border:2px solid #c8d0c3;color:#293530;border-radius:50%;font-size:11px;font-weight:800;box-shadow:0 5px 10px #0007}
-  .hint {max-width:540px;margin-top:14px;color:#a5b0ab;font-size:12px;text-align:center}
+  .hint {max-width:530px;margin-top:14px;color:#a5b0ab;font-size:12px;text-align:center}
   .hint kbd{font-family:inherit;border:1px solid #58645d;border-radius:3px;padding:1px 5px;color:#cfdbcf}
   .tag {display:inline-block;margin:5px 0;color:#8eaaa0;font-size:10px;letter-spacing:.1em}
   .note {color:#6cbd9f}
   .scope {width:100%;height:42px;display:block;margin-top:5px;opacity:.8}
   .valuebar{height:4px;border-radius:4px;background:#2f463e;overflow:hidden;margin:6px 0 4px}.valuebar>span{display:block;background:#dfb96b;height:100%;border-radius:4px}
-  @media(max-width:430px){.device{padding:16px;border-radius:20px}.controls{margin:15px 0 4px}.wheel{width:156px;height:156px;min-width:156px}.wheel .center{width:70px;height:70px;top:41px;left:41px}.wheel .up,.wheel .down{left:54px}.wheel .down{bottom:0}.wheel .left{top:55px}.wheel .right{top:55px}.transport{min-width:90px}.key{padding:12px 8px}.screen{min-height:315px} }
+  /* Deliberately NO responsive resizing: the actual Y2 framebuffer is 480×360. */
+  /* On narrow browser windows the preview scrolls horizontally instead. */
 </style>
 </head>
 <body>
 <header>
   <div class="brand">Y2<span style="color:#dfb96b">SYNTH</span><b>UI LAB / 01</b></div>
-  <div class="caption">Web Audio prototype<br>Mac / browser — not Y2 firmware</div>
+  <div class="caption">Native Y2 LCD grid: 480 × 360 px<br>2.4″ / 4:3 · CSS pixel coordinates</div>
 </header>
 <div class="device">
-  <div class="device-head"><span>Y2S · PROTOTYPE</span><span class="speaker" aria-hidden="true"></span></div>
-  <div class="screen" aria-label="Экран Y2Synth">
+  <div class="device-head"><span>Y2S · 480×360 NATIVE</span><span class="speaker" aria-hidden="true"></span></div>
+  <div class="screen" id="native-screen" data-native-width="480" data-native-height="360" aria-label="Экран Y2Synth: 480 на 360 пикселей">
     <div class="screen-head"><span id="crumb">● HOME</span><span class="right" id="screen-tempo">120 BPM</span></div>
     <div id="screen-main" aria-live="polite"></div>
     <div class="screen-foot"><span id="screen-message">Нажми PLAY для звука</span><span id="screen-step">01 / 16</span></div>
@@ -87,7 +88,8 @@
   </div>
 </div>
 <div class="hint">Управление: <kbd>Space</kbd> PLAY · <kbd>Enter</kbd> SELECT · <kbd>↑</kbd>/<kbd>↓</kbd> меню · <kbd>←</kbd>/<kbd>→</kbd> значение · <kbd>Esc</kbd> назад</div>
-<div class="tag">Самостоятельный браузерный эскиз. Звук имитируется Web Audio, Rust / Magenta.js не запускаются.</div>
+<div class="tag">480×360 — точная координатная сетка интерфейса (CSS px). Физический масштаб на мониторе Mac зависит от его DPI и zoom браузера.</div>
+<div class="tag">Web Audio — имитация, без запуска Rust / DrumsRNN. Параметры страницы не хранятся на сервере.</div>
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
