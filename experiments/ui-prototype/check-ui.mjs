@@ -75,7 +75,7 @@ const document = {
   addEventListener() {},
   querySelectorAll() { return []; },
 };
-runInNewContext(script[1] + String.raw\`
+runInNewContext(script[1] + String.raw`
 if (!state.pluck || !state.pad) throw new Error("Missing named instruments");
 if (state.pluck.notes.some(note => note.len === 8)) throw new Error("Wrong Pluck demo");
 if (!state.pad.notes.every(note => note.len === 8)) throw new Error("Wrong Pad demo");
@@ -95,5 +95,5 @@ restoreDemo("pluck");
 if (state.pluck.notes.length !== 6 || state.pluck.notes.some(note => note.len === 8)) {
   throw new Error("Pluck demo restore did not restore melody");
 }
-\`, { document, window: {}, setTimeout() {}, clearInterval() {} });
+`, { document, window: {}, setTimeout() {}, clearInterval() {} });
 console.log("OK: Y2 480×360, fixed Pluck/Pad internal IDs, independent generators and JavaScript syntax.");
