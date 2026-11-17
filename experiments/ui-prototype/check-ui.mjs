@@ -34,6 +34,25 @@ assert.match(html, /data-native-width="480" data-native-height="360"/);
 assert.match(html, /AudioContext/);
 assert.match(html, /GENERATE TRACK/);
 assert.match(html, /fx:\{delay:true/);
+// Click wheel hardware geometry: all controls are integrated in one ring.
+for (const id of ["wheel", "return", "prev", "next", "play", "center"]) {
+  assert.match(html, new RegExp(\`id="\${id}"\`), \`Missing click-wheel control: \${id}\`);
+}
+for (const id of ["back", "home", "up", "down", "left", "right"]) {
+  assert.doesNotMatch(html, new RegExp(\`id="\${id}"\`),
+    \`Old separate control must not return: \${id}\`);
+}
+assert.match(html, /\.wheel \{width:340px;height:340px;/);
+assert.match(html, /function startWheelGesture\(event\)/);
+assert.match(html, /function moveWheelGesture\(event\)/);
+assert.match(html, /function finishWheelGesture\(event\)/);
+assert.match(html, /Math\.atan2\(\s*Math\.sin\(nextAngle-wheelMotion\.lastAngle\),/);
+assert.match(html, /touch-action:none;user-select:none/);
+assert.match(html, /wheelElement\.addEventListener\("wheel"/);
+assert.match(html, /state\.editing=true/);
+assert.match(html, /function wheelTurn\(steps\)/);
+assert.match(html, /function stopTransport\(\)/);
+assert.match(html, /longPressTimeout=setTimeout/);
 // Instrument keys are stable, semantic and shared across state, routes,
 // the sequencer, generators and the audio scheduler. Do not alias to synth1/2.
 assert.match(html, /pluck:\{level:[^}]*notes:\[\]\}, pad:\{level:[^}]*notes:\[\]\}/);
@@ -68,6 +87,11 @@ const document = {
         textContent: "", innerHTML: "", onclick: null,
         addEventListener() {},
         querySelector() { return null; },
+        getBoundingClientRect() { return {left:0, top:0, width:340, height:340}; },
+        classList: { add() {}, remove() {} },
+        setPointerCapture() {},
+        hasPointerCapture() { return false; },
+        releasePointerCapture() {},
       });
     }
     return elements.get(id);
@@ -95,5 +119,46 @@ restoreDemo("pluck");
 if (state.pluck.notes.length !== 6 || state.pluck.notes.some(note => note.len === 8)) {
   throw new Error("Pluck demo restore did not restore melody");
 }
+// Menu movement, value edit mode and round-the-ring gestures are independent.
+home();
+wheelTurn(1);
+if (state.page !== "settings" || state.focus !== 0) throw new Error("Home wheel navigation");
+wheelTurn(2);
+if (state.focus !== 2) throw new Error("Clockwise scroll should select FX");
+wheelTurn(-1);
+if (state.focus !== 1) throw new Error("Anticlockwise scroll should select AI");
+go("tempo");
+if (state.editing) throw new Error("New page must exit edit mode");
+activate();
+if (!state.editing) throw new Error("OK must start editing the BPM");
+const bpmBefore = state.bpm;
+wheelTurn(2);
+if (state.bpm !== bpmBefore + 4) throw new Error("Rotation must edit tempo");
+activate();
+if (state.editing) throw new Error("Second OK must finish numeric editing");
+home();
+const stepBefore = state.playhead;
+leftRight(1);
+if (state.playhead !== (stepBefore + 1) % 16) throw new Error("NEXT must advance step");
+// Test a clockwise quadrant drag through the exposed ring.
+home();
+const rect = {left:0,top:0,width:340,height:340};
+if (!pointerOnRing({clientX:320,clientY:170},rect)) throw new Error("Ring zone missing");
+if (pointerOnRing({clientX:170,clientY:170},rect)) throw new Error("OK zone included in ring");
+const touch = {pointerId:7,clientX:320,clientY:170,preventDefault(){},
+  target:{closest(){return null;}}};
+startWheelGesture(touch);
+if (!wheelMotion.active) throw new Error("Drag did not start");
+moveWheelGesture({...touch,clientX:170,clientY:320});
+if (state.page !== "settings" || state.focus !== 3) {
+  throw new Error("Clockwise drag must scroll multiple menu steps");
+}
+finishWheelGesture(touch);
+if (wheelMotion.active) throw new Error("Pointer release must end gesture");
+state.playing=true;state.paused=true;state.playhead=9;audio.step=9;
+stopTransport();
+if (state.playing || state.paused || state.playhead !== 0 || audio.step !== 0) {
+  throw new Error("Long-press STOP must reset playhead and transport");
+}
 `, { document, window: {}, setTimeout() {}, clearInterval() {} });
-console.log("OK: Y2 480×360, fixed Pluck/Pad internal IDs, independent generators and JavaScript syntax.");
+console.log("OK: Y2 480×360, native click-wheel buttons/rotations, BPM edit mode, transport and independent Pluck/Pad.");
