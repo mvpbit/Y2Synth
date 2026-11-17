@@ -206,7 +206,7 @@ pub fn render_bar(track: &SynthTrack, bpm: f32, sample_rate: u32) -> io::Result<
         return Err(invalid("Synth sample rate must be 8000..=192000"));
     }
     let step_sec = 60.0 / bpm as f64 / 4.0;
-    let frames = (step_sec * STEPS_PER_BAR as f64 * sample_rate as f64).round() as usize;
+    let frames = (60.0_f64 / bpm as f64 * 4.0 * sample_rate as f64).round() as usize;
     let tail_frames = (2.2 * sample_rate as f64).ceil() as usize;
     let mut full = vec![0.0_f32; frames + tail_frames];
     for &note in &track.notes {
