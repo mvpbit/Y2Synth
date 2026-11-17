@@ -512,23 +512,115 @@ out.addEventListener("click",(event)=>{
   const row=event.target.closest("[data-index]");
   if(row&&!row.disabled)activate(Number(row.dataset.index));
 });
-$("play").onclick=transport;
-$("back").onclick=back;$("home").onclick=home;
+// The Y2 scroll surface is a touch ring, not a physically turning wheel.
+// A circular pointer gesture emits one step every 22.5 degrees. Angular
+// differences are normalized across the -PI/+PI boundary, so a full turn
+// scrolls smoothly even when the gesture crosses 12 o'clock or 9 o'clock.
+const wheelElement=$("wheel");
+const wheelMotion={active:false,pointerId:null,lastAngle:0,remainder:0};
+const WHEEL_ANGLE_STEP=Math.PI/8;
+function ringAngle(event,rect){
+  return Math.atan2(
+    event.clientY-(rect.top+rect.height/2),
+    event.clientX-(rect.left+rect.width/2)
+  );
+}
+function pointerOnRing(event,rect){
+  const dx=event.clientX-(rect.left+rect.width/2);
+  const dy=event.clientY-(rect.top+rect.height/2);
+  const radius=Math.hypot(dx,dy);
+  return radius>=51 && radius<=rect.width/2;
+}
+function startWheelGesture(event){
+  // The outer 4 buttons remain individually clickable; drag on the exposed
+  // ring between those buttons, not on the center OK or button surfaces.
+  if(event.target.closest("button"))return;
+  const rect=wheelElement.getBoundingClientRect();
+  if(!pointerOnRing(event,rect))return;
+  wheelMotion.active=true;wheelMotion.pointerId=event.pointerId;
+  wheelMotion.lastAngle=ringAngle(event,rect);
+  wheelMotion.remainder=0;
+  wheelElement.classList.add("rotating");
+  wheelElement.setPointerCapture(event.pointerId);
+  event.preventDefault();
+}
+function moveWheelGesture(event){
+  if(!wheelMotion.active||event.pointerId!==wheelMotion.pointerId)return;
+  const nextAngle=ringAngle(event,wheelElement.getBoundingClientRect());
+  const difference=Math.atan2(
+    Math.sin(nextAngle-wheelMotion.lastAngle),
+    Math.cos(nextAngle-wheelMotion.lastAngle)
+  );
+  wheelMotion.lastAngle=nextAngle;
+  wheelMotion.remainder+=difference;
+  const steps=Math.trunc(wheelMotion.remainder/WHEEL_ANGLE_STEP);
+  if(steps){
+    wheelMotion.remainder-=steps*WHEEL_ANGLE_STEP;
+    wheelTurn(steps);
+  }
+  event.preventDefault();
+}
+function finishWheelGesture(event){
+  if(!wheelMotion.active||event.pointerId!==wheelMotion.pointerId)return;
+  wheelMotion.active=false;wheelMotion.pointerId=null;
+  wheelMotion.remainder=0;
+  wheelElement.classList.remove("rotating");
+  if(wheelElement.hasPointerCapture?.(event.pointerId)){
+    wheelElement.releasePointerCapture(event.pointerId);
+  }
+}
+wheelElement.addEventListener("pointerdown",startWheelGesture);
+wheelElement.addEventListener("pointermove",moveWheelGesture);
+wheelElement.addEventListener("pointerup",finishWheelGesture);
+wheelElement.addEventListener("pointercancel",finishWheelGesture);
+// Trackpad and mouse-wheel are additional ways to rotate the same ring.
+wheelElement.addEventListener("wheel",(event)=>{
+  event.preventDefault();
+  wheelTurn(Math.sign(event.deltaY));
+},{passive:false});
+wheelElement.addEventListener("contextmenu",(event)=>event.preventDefault());
+
+// Physical Y2 positions: top Return, left Previous, right Next,
+// bottom Play/Pause (long press Stop), center OK.
+$("return").onclick=back;
+$("prev").onclick=()=>leftRight(-1);
+$("next").onclick=()=>leftRight(1);
 $("center").onclick=()=>activate();
-$("up").onclick=()=>direction(-1);$("down").onclick=()=>direction(1);
-$("left").onclick=()=>leftRight(-1);$("right").onclick=()=>leftRight(1);
+const playButton=$("play");
+let longPressTimeout=null;
+let longPressHandled=false;
+playButton.addEventListener("pointerdown",(event)=>{
+  if(event.pointerType==="mouse" && event.button!==0)return;
+  longPressHandled=false;
+  clearTimeout(longPressTimeout);
+  longPressTimeout=setTimeout(()=>{
+    longPressHandled=true;
+    stopTransport();
+  },650);
+});
+function cancelPlayHold(){
+  clearTimeout(longPressTimeout);longPressTimeout=null;
+}
+playButton.addEventListener("pointerup",cancelPlayHold);
+playButton.addEventListener("pointercancel",cancelPlayHold);
+playButton.addEventListener("pointerleave",cancelPlayHold);
+playButton.onclick=()=>{
+  if(longPressHandled){longPressHandled=false;return;}
+  transport();
+};
 document.addEventListener("keydown",(event)=>{
   if(event.ctrlKey||event.metaKey||event.altKey)return;
   const key=event.key;
-  if(![" ","Enter","Escape","Backspace","ArrowUp","ArrowDown","ArrowLeft","ArrowRight"].includes(key))return;
+  if(![" ","Enter","Escape","Backspace","ArrowUp","ArrowDown","ArrowLeft","ArrowRight","h","H"].includes(key))return;
   event.preventDefault();
   if(key===" ")transport();
   if(key==="Enter")activate();
   if(key==="Escape"||key==="Backspace")back();
-  if(key==="ArrowUp")direction(-1);
-  if(key==="ArrowDown")direction(1);
+  if(key==="ArrowUp")wheelTurn(-1);
+  if(key==="ArrowDown")wheelTurn(1);
   if(key==="ArrowLeft")leftRight(-1);
   if(key==="ArrowRight")leftRight(1);
+  if(key==="h"||key==="H")home();
 });
 render();
 </script>
