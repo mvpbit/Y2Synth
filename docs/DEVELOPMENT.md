@@ -31,6 +31,14 @@ cargo run --release --locked \
 
 Команды в `y2>`: `play`, `regenerate`, `synth1 pluck`, `synth1 pad`, `synth1 generate`, `fx`, `fx off`, `fx on`, `fx delay steps 4`, `fx delay feedback 0.55`, `fx delay wet 1.0`, `fx reverb size 0.9`, `fx reverb damping 0.5`, `fx reverb wet 1.0`, `fx reset`, `stop`, `quit`. Менять параметр можно во время работы; новый микс вступает на следующем такте. Wav-модуль и ML-веса не работают в CPAL callback.
 
+## Новый эксперимент: UI в браузере / Web Audio (18 ноября 2026)
+
+Созданы `experiments/ui-prototype/index.html` (автономный UI-прототип) и `experiments/ui-prototype/README.md`. Макет маленького устройства включает PLAY, BACK, колесо с SELECT/навигацией, экран, полосы 16-шагового ритма, USER/AI, Synth 1 Pluck/Pad и настройки общего Delay → Reverb. Для проверки экранных сценариев Web Audio создаёт собственные простые kick/snare/hat, Pluck/Pad и эффекты, не меняя Rust-движок.
+
+**Это не порт DrumsRNN или Rust**, только быстрая интерактивная модель. Генерация DRUMS в браузере процедурная, не модель Magenta; Reverb построен на ConvolverNode, не на Rust comb/all-pass, поэтому совпадение звучания не заявлено. JavaScript **успешно разобран синтаксически** при создании файла; реальный запуск и прослушивание страницы пользователем **ещё не подтверждены**.
+
+Проверка: `git pull --ff-only`, из корня `python3 -m http.server 8765 --bind 127.0.0.1`, открыть `http://127.0.0.1:8765/experiments/ui-prototype/index.html`. Начать с PLAY (браузер требует пользовательский жест для AudioContext); SELECT открывает меню, клавиши Enter/стрелки/Esc/Space повторяют колесо. Цель — собрать впечатления о размерах, сетке, управлении и доступности основных действий до появления Y2.
+
 ## История экспериментов (сохранена для воспроизводимости)
 
 Ниже — **хронологические записи прежних этапов**. Они не являются самостоятельной актуальной инструкцией. Для текущего статуса ориентироваться на сводку выше и [ROADMAP](ROADMAP.md); для архитектуры — [ARCHITECTURE](ARCHITECTURE.md).
