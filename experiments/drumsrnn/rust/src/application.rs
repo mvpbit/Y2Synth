@@ -166,11 +166,14 @@ impl ApplicationController {
                 Ok(AppResponse::DrumGenerated { hits })
             }
             Command::GenerateAll => Ok(AppResponse::NotImplemented(
-                "Generate All requires both future AI synth generators",
+                "Generate All requires Synth 2 and coordinated multi-track generation",
             )),
-            Command::GenerateTrack(TrackId::Synth1 | TrackId::Synth2) => {
-                Ok(AppResponse::NotImplemented("AI synth generator not implemented"))
-            }
+            Command::GenerateTrack(TrackId::Synth1) => Ok(AppResponse::NotImplemented(
+                "Synth 1 composition requires dispatch_with_synth",
+            )),
+            Command::GenerateTrack(TrackId::Synth2) => Ok(AppResponse::NotImplemented(
+                "Synth 2 generator not implemented",
+            )),
             Command::EditUserTrack(TrackId::Drums) => Ok(AppResponse::EditDrums),
             Command::EditUserTrack(TrackId::Synth1) => Ok(AppResponse::EditSynth1),
             Command::EditUserTrack(TrackId::Synth2) => {
