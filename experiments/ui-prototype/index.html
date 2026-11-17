@@ -29,7 +29,7 @@
   .seq-row {display:flex;align-items:center;gap:6px;margin:7px 0}
   .seq {display:grid;grid-template-columns:repeat(16,minmax(0,1fr));flex:1;gap:3px}
   .beat {border:1px solid #324942;border-radius:3px;height:15px;min-width:0;background:#1c302a;cursor:pointer;padding:0}
-  .beat.on {background:#71c8aa;border-color:#a4ddc8}.beat.synth.on{background:#dfb96b;border-color:#f0dca9}
+  .beat.on {background:#71c8aa;border-color:#a4ddc8}.beat.instrument.on{background:#dfb96b;border-color:#f0dca9}
   .beat.head{outline:1px solid #fff;outline-offset:1px}
   .beat:nth-child(4n+1){border-left:2px solid #62796c}
   .menu {display:grid;gap:5px;max-height:245px;overflow-y:auto;scrollbar-color:#4a675b transparent}
@@ -96,23 +96,23 @@ const $ = (id) => document.getElementById(id);
 const out = $("screen-main");
 const state = {
   page:"home", stack:[], focus:0, bpm:120, playing:false, playhead:0,
-  // Instrument roles are fixed: Synth 1 = Pluck; Synth 2 = Pad.
-  synth1:{level:0.67,notes:[]}, synth2:{level:0.6,notes:[]},
+  // Instrument roles are fixed: Pluck and Pad are separate named instruments.
+  pluck:{level:0.67,notes:[]}, pad:{level:0.6,notes:[]},
   drums:{kick:[0,8],snare:[4,12],hat:[0,2,4,6,8,10,12,14]},
   message:"Нажми PLAY для звука",
   fx:{delay:true, delaySteps:2, delayFeedback:.38, delayWet:.3,
       reverb:true, reverbSize:.65, reverbDamping:.42, reverbWet:.3},
 };
 const PITCHES={C4:60,Eb4:63,G4:67,Ab3:56};
-function demoNotes(preset){
-  return preset==="Pad"
+function demoNotes(instrument){
+  return instrument==="pad"
     ? [{step:0,pitch:60,len:8},{step:0,pitch:63,len:8},{step:0,pitch:67,len:8},
        {step:8,pitch:56,len:8},{step:8,pitch:60,len:8},{step:8,pitch:63,len:8}]
     : [{step:0,pitch:60,len:2},{step:3,pitch:67,len:2},{step:6,pitch:63,len:2},
        {step:9,pitch:70,len:2},{step:12,pitch:67,len:2},{step:14,pitch:63,len:2}];
 }
-state.synth1.notes=demoNotes("Pluck");
-state.synth2.notes=demoNotes("Pad");
+state.pluck.notes=demoNotes("pluck");
+state.pad.notes=demoNotes("pad");
 const inRange=(value,min,max)=>Math.max(min,Math.min(max,value));
 const format=(v)=>Number(v).toFixed(2);
 function inform(message){state.message=message; $("screen-message").textContent=message;}
@@ -206,10 +206,10 @@ function hitDrum(voice,time){
     noise(time,.067,.17,6000,"highpass");
   }
 }
-function hitSynth(note,time,track){
+function playInstrumentNote(note,time,instrument){
   const base=440*Math.pow(2,(note.pitch-69)/12),stepDuration=60/state.bpm/4;
-  const vel=state[track].level,gate=note.len*stepDuration;
-  if(track==="synth1"){
+  const vel=state[instrument].level,gate=note.len*stepDuration;
+  if(instrument==="pluck"){
     [1,2,3].forEach((harm,i)=>{
       tone(base*harm,time,Math.min(1.2,.25+gate*.48)/(1+i*.22),
         vel*[.22,.08,.036][i],"sine",.004+i*.001);
@@ -235,9 +235,9 @@ function scheduleStep(index,time){
   for(const key of ["kick","snare","hat"]){
     if(state.drums[key].includes(index))hitDrum(key,time);
   }
-  for(const track of ["synth1","synth2"]){
+  for(const track of ["pluck","pad"]){
     for(const note of state[track].notes){
-      if(note.step===index)hitSynth(note,time,track);
+      if(note.step===index)playInstrumentNote(note,time,track);
     }
   }
   const delta=Math.max(0,(time-audio.ctx.currentTime)*1000);
@@ -279,12 +279,12 @@ function generateDrums(){
   state.drums={kick,snare,hat};
   inform("Новый алгоритмический ритм (не DrumsRNN)");
 }
-function generateSynth(track){
+function generateInstrument(instrument){
   const roots=[48,50,52,53,55,57],root=roots[Math.floor(Math.random()*roots.length)];
   const motion=[8,5,10][Math.floor(Math.random()*3)];
   const chords=[[0,3,7,10],[motion,motion+4,motion+7,motion+11]];
   const notes=[];
-  if(track==="synth1"){
+  if(instrument==="pluck"){
     const slots=[0,2+Math.floor(Math.random()*2),5+Math.floor(Math.random()*2),7,
                  8,10+Math.floor(Math.random()*2),13+Math.floor(Math.random()*2),15];
     const motif=[0,1+Math.floor(Math.random()*3),2,1];
@@ -299,12 +299,12 @@ function generateSynth(track){
         step:half*8,pitch:root+interval+(i?12:0),len:8
       }));
   }
-  state[track].notes=notes;
-  inform("Новая партия "+(track==="synth1"?"PLUCK":"PAD"));
+  state[instrument].notes=notes;
+  inform("Новая партия "+instrument.toUpperCase());
 }
 function restoreDemo(track){
-  state[track].notes=demoNotes(track==="synth1"?"Pluck":"Pad");
-  inform("Демо-партия "+(track==="synth1"?"PLUCK":"PAD")+" восстановлена");
+  state[track].notes=demoNotes(track==="pluck"?"PLUCK":"PAD");
+  inform("Демо-партия "+(track==="pluck"?"PLUCK":"PAD")+" восстановлена");
 }
 function go(page){state.stack.push(state.page);state.page=page;state.focus=0;render();}
 function back(){if(state.stack.length){state.page=state.stack.pop();state.focus=0;render();}else if(state.page!=="home"){state.page="home";state.focus=0;render();}}
@@ -317,8 +317,8 @@ const choices={
     {label:"TEMPO",sub:state.bpm+" BPM",action:()=>go("tempo")},
   ],
   user:()=>[
-    {label:"PLUCK",sub:"Мелодия · ноты и уровень",action:()=>go("synth1")},
-    {label:"PAD",sub:"Аккорды · ноты и уровень",action:()=>go("synth2")},
+    {label:"PLUCK",sub:"Мелодия · ноты и уровень",action:()=>go("pluck")},
+    {label:"PAD",sub:"Аккорды · ноты и уровень",action:()=>go("pad")},
     {label:"DRUMS",sub:"Ритмический рисунок",action:()=>go("drums")},
   ],
   ai:()=>[
@@ -326,19 +326,19 @@ const choices={
     {label:"GENERATE ALL",sub:"Пока не реализовано",disabled:true},
   ],
   aiTrack:()=>[
-    {label:"PLUCK",sub:"Новая мелодия",action:()=>{generateSynth("synth1");render();}},
-    {label:"PAD",sub:"Новая гармония",action:()=>{generateSynth("synth2");render();}},
+    {label:"PLUCK",sub:"Новая мелодия",action:()=>{generateInstrument("pluck");render();}},
+    {label:"PAD",sub:"Новая гармония",action:()=>{generateInstrument("pad");render();}},
     {label:"DRUMS",sub:"Браузерный алгоритм, не DrumsRNN",action:()=>{generateDrums();render();}},
   ],
-  synth1:()=>[
-    {label:"GENERATE MELODY",sub:"Pluck · новая мелодия",action:()=>{generateSynth("synth1");render();}},
-    {label:"DEMO PHRASE",sub:"Вернуть исходные ноты",action:()=>{restoreDemo("synth1");render();}},
-    {label:"LEVEL",sub:"◀ / ▶ · громкость Pluck",value:format(state.synth1.level),key:"synth1Level"},
+  pluck:()=>[
+    {label:"GENERATE MELODY",sub:"Pluck · новая мелодия",action:()=>{generateInstrument("pluck");render();}},
+    {label:"DEMO PHRASE",sub:"Вернуть исходные ноты",action:()=>{restoreDemo("pluck");render();}},
+    {label:"LEVEL",sub:"◀ / ▶ · громкость Pluck",value:format(state.pluck.level),key:"pluckLevel"},
   ],
-  synth2:()=>[
-    {label:"GENERATE CHORDS",sub:"Pad · новая гармония",action:()=>{generateSynth("synth2");render();}},
-    {label:"DEMO CHORDS",sub:"Вернуть исходные аккорды",action:()=>{restoreDemo("synth2");render();}},
-    {label:"LEVEL",sub:"◀ / ▶ · громкость Pad",value:format(state.synth2.level),key:"synth2Level"},
+  pad:()=>[
+    {label:"GENERATE CHORDS",sub:"Pad · новая гармония",action:()=>{generateInstrument("pad");render();}},
+    {label:"DEMO CHORDS",sub:"Вернуть исходные аккорды",action:()=>{restoreDemo("pad");render();}},
+    {label:"LEVEL",sub:"◀ / ▶ · громкость Pad",value:format(state.pad.level),key:"padLevel"},
   ],
   drums:()=>[
     {label:"GENERATE RHYTHM",sub:"Браузерная имитация",action:()=>{generateDrums();render();}},
@@ -361,10 +361,10 @@ const choices={
 function edit(key,direction){
   let value;
   if(key==="bpm"){state.bpm=inRange(state.bpm+direction*2,40,240);value=state.bpm;}
-  else if(key==="synth1Level"||key==="synth2Level"){
-    const track=key==="synth1Level"?"synth1":"synth2";
-    state[track].level=inRange(Math.round((state[track].level+direction*.05)*100)/100,0,1);
-    value=state[track].level;
+  else if(key==="pluckLevel"||key==="padLevel"){
+    const instrument=key==="pluckLevel"?"pluck":"pad";
+    state[instrument].level=inRange(Math.round((state[instrument].level+direction*.05)*100)/100,0,1);
+    value=state[instrument].level;
   }
   else{
     const options={delaySteps:[1,8,1],delayFeedback:[0,.75,.05],delayWet:[0,1,.05],
@@ -407,7 +407,7 @@ function stepGrid(label,entries,id){
   return '<div class="seq-row"><span class="seq-label">'+label+'</span><div class="seq">'+
     Array.from({length:16},(_,i)=>{
       const on=active.has(i);
-      return '<button class="beat '+(on?"on ":"")+(id==="synth1"||id==="synth2"?"synth ":"")+
+      return '<button class="beat '+(on?"on ":"")+(id==="pluck"||id==="pad"?"instrument ":"")+
         (state.playhead===i&&state.playing?"head":"")+'" data-step="'+i+
         '" data-voice="'+id+'" aria-label="'+label+' шаг '+(i+1)+
         '"></button>';
@@ -423,13 +423,13 @@ function renderHome(){
     stepGrid("KICK",state.drums.kick,"kick")+
     stepGrid("SNARE",state.drums.snare,"snare")+
     stepGrid("HAT",state.drums.hat,"hat")+
-    stepGrid("PLUCK",[...new Set(state.synth1.notes.map(n=>n.step))],"synth1")+
-    stepGrid("PAD",[...new Set(state.synth2.notes.map(n=>n.step))],"synth2");
+    stepGrid("PLUCK",[...new Set(state.pluck.notes.map(n=>n.step))],"pluck")+
+    stepGrid("PAD",[...new Set(state.pad.notes.map(n=>n.step))],"pad");
 }
 function render(){
   $("screen-tempo").textContent=state.bpm+" BPM";
   $("crumb").textContent="● "+({home:"HOME",settings:"PLAY SETTINGS",user:"USER",ai:"AI",aiTrack:"GENERATE TRACK",
-    synth1:"PLUCK",synth2:"PAD",drums:"DRUMS",fx:"MASTER FX",tempo:"TEMPO"}[state.page]||state.page);
+    pluck:"PLUCK",pad:"PAD",drums:"DRUMS",fx:"MASTER FX",tempo:"TEMPO"}[state.page]||state.page);
   $("screen-message").textContent=state.message;
   $("screen-step").textContent=String(state.playhead+1).padStart(2,"0")+" / 16";
   if(state.page==="home"){out.innerHTML=renderHome();}
@@ -452,8 +452,8 @@ out.addEventListener("click",(event)=>{
   const beat=event.target.closest(".beat");
   if(beat){
     const voice=beat.dataset.voice,index=Number(beat.dataset.step);
-    if(voice==="synth1"||voice==="synth2"){
-      inform("Партия "+(voice==="synth1"?"PLUCK":"PAD")+" · USER");
+    if(voice==="pluck"||voice==="pad"){
+      inform("Партия "+(voice==="pluck"?"PLUCK":"PAD")+" · USER");
       return;
     }
     const steps=state.drums[voice],at=steps.indexOf(index);
