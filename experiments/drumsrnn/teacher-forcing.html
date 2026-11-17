@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Y2Synth — DrumsRNN teacher-forced numerical reference</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, -apple-system, sans-serif; }
+    body { max-width: 820px; margin: 38px auto; padding: 0 18px; line-height: 1.5; }
+    h1 { margin-bottom: .2rem; }
+    .muted { color: #b4b4b4; }
+    button { font: inherit; padding: .65rem 1rem; margin: .5rem .6rem .5rem 0; }
+    button:disabled { opacity: .5; }
+    pre { background: #1b1b1b; border: 1px solid #555; border-radius: 7px;
+          padding: 1rem; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 450px; overflow: auto; }
+  </style>
+  <!-- Same pinned Magenta.js as the existing scratch/Argmax reference. -->
+  <script src="https://cdn.jsdelivr.net/npm/@magenta/music@1.23.1"></script>
+</head>
+<body>
+  <h1>Y2Synth · Teacher-forcing verification</h1>
+  <p class="muted">Diagnostic only: deliberately provide nonzero previous drum classes.
+    This is NOT the normal autonomous generation mode of Y2Synth.</p>
+  <p>Checkpoint: <code>models/drum_kit_rnn_tfjs/</code>, Magenta.js <code>1.23.1</code>,
+    deterministic Argmax, 16 predicted distributions × 512 probabilities.</p>
+  <p>The first model input is one silent bootstrap step. For prediction 0, the
+    primer contains silence only; for prediction 1 it also contains the first
+    forced class, and so on through prediction 15. Each call requests exactly
+    one next-step distribution using Magenta.js's <code>MusicRNN</code> API.
+    The 15 forced classes do not come from any Magenta output.</p>
+  <p>Fixed 15-class history (nine MIDI drums represented by a 9-bit integer):</p>
+  <pre id="fixture"></pre>
+  <button id="run">Generate 16 × 512 reference</button>
+  <button id="save" disabled>Save JSON</button>
+  <p id="status" role="status">Ready.</p>
+  <pre id="output">No reference generated yet.</pre>
+
+  <script>
+    "use strict";
+    // One deliberately fixed nonzero test history, not training data nor an
+    // input to Y2Synth's normal autonomous generation path.
+    const FORCED_CLASSES = Object.freeze([5, 4, 0, 6, 2, 4, 8, 1, 5, 20, 2, 64, 4, 3, 17]);
+    const DRUM_PITCHES = Object.freeze([36, 38, 42, 46, 45, 48, 50, 49, 51]);
+    const STEPS = 16;
+    const CLASSES = 512;
+    const checkpoint = new URL("./models/drum_kit_rnn_tfjs", location.href)
+      .href.replace(/\/$/, "");
+    const runButton = document.getElementById("run");
+    const saveButton = document.getElementById("save");
+    const status = document.getElementById("status");
+    const output = document.getElementById("output");
+    document.getElementById("fixture").textContent = JSON.stringify(FORCED_CLASSES);
+
+    let reference = null;
+    window.addEventListener("error", (event) => {
+      status.textContent = "JavaScript error: " + event.message;
+    });
+
+    function prefixForPrediction(predictionStep) {
+      // The *same* initial silent input used in the normal from-scratch test.
+      // Output i is predicted after consuming 0 and FORCED_CLASSES[0..i-1].
+      const notes = [];
+      for (let index = 0; index < predictionStep; index++) {
+        const mask = FORCED_CLASSES[index];
+        for (let bit = 0; bit < DRUM_PITCHES.length; bit++) {
+          if (mask & (1 << bit)) {
+            notes.push({
+              pitch: DRUM_PITCHES[bit],
+              quantizedStartStep: index + 1,
+              quantizedEndStep: index + 2,
+              isDrum: true, velocity: 100,
+            });
+          }
+        }
+      }
+      return {
+        notes,
+        quantizationInfo: {stepsPerQuarter: 4},
+        tempos: [{time: 0, qpm: 120}],
+        timeSignatures: [{time: 0, numerator: 4, denominator: 4}],
+        totalQuantizedSteps: predictionStep + 1,
+      };
+    }
+
+    function argmaxFirst(values) {
+      let best = 0;
+      for (let i = 1; i < values.length; i++) {
+        if (values[i] > values[best]) best = i;
+      }
+      return best;
+    }
+
+    runButton.addEventListener("click", async () => {
+      runButton.disabled = true;
+      saveButton.disabled = true;
+      reference = null;
+      let model;
+      try {
+        if (!window.mm || typeof window.mm.MusicRNN !== "function") {
+          throw new Error("Magenta.js library did not load; check CDN/network.");
+        }
+        status.textContent = "Loading local checkpoint...";
+        model = new window.mm.MusicRNN(checkpoint);
+        await model.initialize();
+        const probabilities = [];
+        const predictedClasses = [];
+
+        for (let step = 0; step < STEPS; step++) {
+          status.textContent = "Computing reference " + (step + 1) + " / " + STEPS;
+          // Original Magenta.js's public API. We do not modify library internals.
+          // Each invocation restarts the model and consumes the same specified
+          // prefix, so the next predicted distribution has the required history.
+          const response = await model.continueSequenceAndReturnProbabilities(
+            prefixForPrediction(step), 1, undefined,
+          );
+          if (!response.probs || response.probs.length !== 1) {
+            throw new Error("Expected exactly one next-step probability vector at " + step);
+          }
+          const row = Array.from(response.probs[0]);
+          if (row.length !== CLASSES ||
+              row.some(value => !Number.isFinite(value) || value < 0 || value > 1)) {
+            throw new Error("Invalid probability row at step " + step);
+          }
+          const sum = row.reduce((a, b) => a + b, 0);
+          if (Math.abs(sum - 1) > 1e-3) {
+            throw new Error("Unnormalized reference distribution at step " + step);
+          }
+          const predicted = argmaxFirst(row);
+          const generated = await response.sequence;
+          // Verify that the class actually output by Magenta.js equals Argmax.
+          const decoded = (generated.notes || []).reduce((mask, note) => {
+            const bit = DRUM_PITCHES.indexOf(note.pitch);
+            if (bit < 0 || note.quantizedStartStep !== 0) {
+              throw new Error("Unexpected generated drum note at step " + step);
+            }
+            return mask | (1 << bit);
+          }, 0);
+          if (decoded !== predicted) {
+            throw new Error("Magenta.js selected class does not match softmax Argmax at " + step);
+          }
+          probabilities.push(row);
+          predictedClasses.push(predicted);
+        }
+
+        reference = {
+          experiment: "Y2Synth Magenta.js DrumsRNN teacher-forced diagnostics",
+          implementation: "@magenta/music@1.23.1",
+          checkpoint: "drum_kit_rnn_tfjs",
+          sampling: "argmax",
+          generationMode: "teacher_forced",
+          primerId: "teacher_forced",
+          noUserInput: false,
+          traceMode: "teacher_forced",
+          forcedClassIds: Array.from(FORCED_CLASSES),
+          sampledClassIds: predictedClasses,
+          tfjsBackend: (window.mm.tf && window.mm.tf.getBackend &&
+            window.mm.tf.getBackend()) || "unknown",
+          timestamp: new Date().toISOString(),
+          probabilities,
+        };
+        output.textContent = [
+          "Computed 16 × 512 = 8192 probabilities.",
+          "Forced history: " + JSON.stringify(reference.forcedClassIds),
+          "Predicted Argmax: " + JSON.stringify(predictedClasses),
+          "Export the reference JSON and compare with Rust verify_reference.",
+        ].join("\n");
+        status.textContent = "Done. Save JSON to run independent Rust comparison.";
+        saveButton.disabled = false;
+      } catch (error) {
+        status.textContent = "Reference failed. Check the details below.";
+        output.textContent = String(error && error.stack || error);
+      } finally {
+        if (model) model.dispose();
+        runButton.disabled = false;
+      }
+    });
+
+    saveButton.addEventListener("click", () => {
+      if (!reference) return;
+      const blob = new Blob([JSON.stringify(reference, null, 2)], {type: "application/json"});
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "drumsrnn-teacher-forced.json";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
+  </script>
+</body>
+</html>
