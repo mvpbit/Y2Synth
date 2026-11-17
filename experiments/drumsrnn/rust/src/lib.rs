@@ -10,6 +10,7 @@ pub mod audio;
 pub mod kit;
 pub mod dsp;
 pub mod sequencer;
+pub mod synth1;
 pub mod project;
 pub mod application;
 pub mod ui;
