@@ -358,3 +358,12 @@ wheel-play  # Replay last saved mix, no generation
 ```
 
 При запуске зафиксировать реальный результат компиляции/тестов, слышимый Pluck/Pad, сохранность Drums при повторной генерации Synth 1, отсутствие нежелательных щелчков на границе такта. При возникновении Rust ошибок — исправить по фактическому логу. Веса DrumsRNN нужны для текущего `live` CLI; сама функция `compose` не требует checkpoint.
+
+
+## Master effects: Delay → Reverb (unverified on Mac)
+
+The project now has a single serial **post-mix** effect chain: **Drums + Synth 1 → tempo-synced Delay → ambient Reverb → output**. `src/master_fx.rs` runs exclusively on the control/offline thread. The mixed mono PCM bar is pre-rolled through both feedback networks for 12 periods so echoes and tails can wrap naturally into the loop; nothing runs on the CPAL callback. Parameters are part of `MusicProject` and the existing RAM-only `last_saved` snapshot. Render and audio queue failures roll back the settings.
+
+Live commands: `fx` (show); `fx on`, `fx off`, `fx reset`; `fx delay on|off`, `fx delay steps 4`, `fx delay feedback 0.4`, `fx delay wet 0.25`; `fx reverb on|off`, `fx reverb size 0.6`, `fx reverb damping 0.45`, `fx reverb wet 0.2`. Delay steps are sixteenth notes, 1..8. Other ranges: feedback 0..0.75; wet 0..0.7; size/damping 0..1. Both inserts are enabled by default.
+
+**Status:** code and tests committed to main, but a full `cargo test --locked --features live-audio` and audition on Mac Studio still need to be confirmed. The offline pre-roll may need optimization on Y2Linux. This is a mono prototype, not a stereo production FX engine.
