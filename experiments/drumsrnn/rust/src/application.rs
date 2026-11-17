@@ -4,14 +4,17 @@
 //! executes operations, prepares a complete PCM bar and publishes it through
 //! AudioPort; the real-time callback remains independent.
 //!
-//! The DRUMS AI generator and USER Synth 1 (Pluck/Pad) exist today.
-//! Synth 2, AI for synths and Generate All remain explicitly unimplemented.
+//! DrumsRNN and the USER Pluck/Pad synth are implemented. A separate seeded
+//! musical composer now provides AI-MENU phrase generation for Synth 1; it
+//! is procedural, NOT a trained neural network. Synth 2 and Generate All
+//! are still explicitly unimplemented.
 
 use crate::generation::GeneratedPattern;
 use crate::kit::DrumKit;
+use crate::melody::RhythmContext;
 use crate::project::{CreationMode, MusicProject, MusicSession, TrackId};
 use crate::sequencer::{prepare_project_loop, PreparedLoop};
-use crate::synth1::SynthTrack;
+use crate::synth1::{SynthPreset, SynthTrack};
 use crate::ui::Command;
 use std::io;
 
@@ -48,12 +51,33 @@ impl<F: FnMut() -> io::Result<GeneratedPattern>> DrumGenerator for F {
     }
 }
 
+/// Replaceable composition boundary. Unlike DrumsRNN, the first version is
+/// deterministic rule-based composition; a neural service can later implement
+/// this trait without changing MenuController or real-time audio code.
+pub trait Synth1Generator {
+    fn generate_synth1(
+        &mut self, preset: SynthPreset, level: f32, rhythm: RhythmContext,
+    ) -> io::Result<SynthTrack>;
+}
+
+impl<F: FnMut(SynthPreset, f32, RhythmContext) -> io::Result<SynthTrack>>
+    Synth1Generator for F
+{
+    fn generate_synth1(
+        &mut self, preset: SynthPreset, level: f32, rhythm: RhythmContext,
+    ) -> io::Result<SynthTrack> {
+        self(preset, level, rhythm)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AppResponse {
     /// The saved project was queued and audio was told to start.
     PlayingLast { mode: CreationMode, bpm: f32 },
     /// A new drum pattern was queued for the next bar (or immediately if stopped).
     DrumGenerated { hits: usize },
+    /// A new autonomous melody/chord phrase, not a pretrained ML prediction.
+    Synth1Generated { notes: usize, preset: SynthPreset },
     /// Drum editor exists as kit controls in the CLI.
     EditDrums,
     /// First USER synthesizer: Pluck/Pad and note editor on the control thread.
@@ -155,6 +179,57 @@ impl ApplicationController {
         }
     }
 
+    /// Full application dispatch: adds composition of Synth 1 to the legacy
+    /// Drums-only `dispatch` path. Old clients remain backwards compatible.
+    /// Both generator services run ONLY on the control thread.
+    pub fn dispatch_with_synth<G: DrumGenerator, S: Synth1Generator, A: AudioPort>(
+        &mut self,
+        command: Command,
+        drums: &mut G,
+        synth: &mut S,
+        audio: &mut A,
+    ) -> io::Result<AppResponse> {
+        if command == Command::GenerateTrack(TrackId::Synth1) {
+            let existing = self.session.current().synth1();
+            // An existing USER or AI patch stays chosen on regeneration.
+            let preset = existing
+                .map(|track| track.content.preset)
+                .unwrap_or(SynthPreset::Pluck);
+            let level = existing.map(|track| track.content.level).unwrap_or(0.75);
+            let rhythm = RhythmContext::from_drums(
+                self.session.current().drums().map(|track| &track.content.pattern),
+            );
+            // Compose before touching either project snapshot or audio output.
+            let generated = synth.generate_synth1(preset, level, rhythm)?;
+            generated.validate()?;
+            if generated.preset != preset || generated.level != level {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Synth generator must preserve chosen preset and level",
+                ));
+            }
+            let note_count = generated.notes.len();
+            self.replace_synth1(generated, CreationMode::Ai, audio)?;
+            return Ok(AppResponse::Synth1Generated { notes: note_count, preset });
+        }
+        self.dispatch(command, drums, audio)
+    }
+
+    /// The same atomic publish/save logic is shared by manual note editing and
+    /// autonomous composition; failed queue leaves saved music untouched.
+    fn replace_synth1<A: AudioPort>(
+        &mut self, synth: SynthTrack, source: CreationMode, audio: &mut A,
+    ) -> io::Result<()> {
+        synth.validate()?;
+        let mut proposed = self.session.current().clone();
+        proposed.replace_synth1(synth, source);
+        let bar = self.prepare_project(&proposed)?;
+        audio.queue_bar(bar)?;
+        *self.session.current_mut() = proposed;
+        self.session.save_current();
+        Ok(())
+    }
+
     /// Change common BPM without regenerating AI or touching the callback.
     /// Drums and Synth 1 are re-rendered together; saved state changes only
     /// after the entire mixed bar has been accepted by AudioPort.
@@ -200,14 +275,7 @@ impl ApplicationController {
         synth: SynthTrack,
         audio: &mut A,
     ) -> io::Result<()> {
-        synth.validate()?;
-        let mut proposed = self.session.current().clone();
-        proposed.replace_synth1(synth, CreationMode::User);
-        let bar = self.prepare_project(&proposed)?;
-        audio.queue_bar(bar)?;
-        *self.session.current_mut() = proposed;
-        self.session.save_current();
-        Ok(())
+        self.replace_synth1(synth, CreationMode::User, audio)
     }
 
 }
@@ -460,6 +528,106 @@ mod tests {
         assert_eq!(app.session().last_saved().unwrap().synth1().unwrap().content, synth);
         assert_eq!(app.session().last_saved().unwrap().drums().unwrap().content.pattern.hits[0].pitch, 38);
         assert_eq!(app.session().last_saved().unwrap().bpm(), 90.0);
+    }
+
+    #[test]
+    fn ai_synth1_generates_new_phrase_and_preserves_drums_preset_and_level() {
+        use crate::melody::compose;
+        use crate::synth1::{SynthPreset, SynthTrack};
+        let mut app = ApplicationController::new(8_000, 120.0).unwrap();
+        let mut audio = TestAudio::default();
+        app.install_initial_drums(pattern(36), DrumKit::default(), &mut audio).unwrap();
+        let mut patch = SynthTrack::demo(SynthPreset::Pad);
+        patch.level = 0.5;
+        app.set_synth1(patch.clone(), &mut audio).unwrap();
+        let drum_before = app.session().current().drums().unwrap().content.pattern.classes.clone();
+        let mut calls = 0;
+        let mut melody = |preset: SynthPreset, level: f32, rhythm: RhythmContext| {
+            assert_eq!(preset, SynthPreset::Pad);
+            assert_eq!(level, 0.5);
+            assert!(rhythm.kicks[0]);
+            calls += 1;
+            compose(42, preset, level, rhythm)
+        };
+        let mut no_drums = || -> io::Result<GeneratedPattern> { panic!("no DrumsRNN call") };
+        let response = app.dispatch_with_synth(
+            Command::GenerateTrack(TrackId::Synth1),
+            &mut no_drums, &mut melody, &mut audio,
+        ).unwrap();
+        assert_eq!(response, AppResponse::Synth1Generated { notes: 8, preset: SynthPreset::Pad });
+        assert_eq!(calls, 1);
+        let saved = app.session().last_saved().unwrap();
+        assert_eq!(saved.mode(), CreationMode::Ai);
+        assert_eq!(saved.synth1().unwrap().source, CreationMode::Ai);
+        assert_eq!(saved.synth1().unwrap().content.level, 0.5);
+        assert_eq!(saved.synth1().unwrap().content.preset, SynthPreset::Pad);
+        assert_ne!(saved.synth1().unwrap().content.notes, patch.notes);
+        assert_eq!(saved.drums().unwrap().content.pattern.classes, drum_before);
+        assert_eq!(saved.drums().unwrap().source, CreationMode::Ai);
+        assert_eq!(audio.starts, 0); // generating doesn't auto-PLAY
+
+        let count = audio.queued.len();
+        let ignored = || -> io::Result<GeneratedPattern> { panic!("PLAY should not generate") };
+        let ignored_synth = |_: SynthPreset, _: f32, _: RhythmContext| -> io::Result<SynthTrack> {
+            panic!("PLAY must use saved notes")
+        };
+        let mut ignored = ignored;
+        let mut ignored_synth = ignored_synth;
+        assert_eq!(app.dispatch_with_synth(
+            Command::PlayLast, &mut ignored, &mut ignored_synth, &mut audio,
+        ).unwrap(), AppResponse::PlayingLast { mode: CreationMode::Ai, bpm: 120.0 });
+        assert_eq!(audio.queued.len(), count + 1);
+        assert_eq!(audio.starts, 1);
+    }
+
+    #[test]
+    fn ai_synth1_failed_generator_or_audio_keeps_last_saved_project() {
+        use crate::melody::compose;
+        use crate::synth1::{SynthPreset, SynthTrack};
+        let mut app = ApplicationController::new(8_000, 120.0).unwrap();
+        let mut audio = TestAudio::default();
+        app.install_initial_drums(pattern(36), DrumKit::default(), &mut audio).unwrap();
+        app.set_synth1(SynthTrack::demo(SynthPreset::Pluck), &mut audio).unwrap();
+        let original = app.session().last_saved().unwrap().synth1().unwrap().content.clone();
+        let mut no_drums = || -> io::Result<GeneratedPattern> { panic!("not drums") };
+        let mut failure = |_: SynthPreset, _: f32, _: RhythmContext| -> io::Result<SynthTrack> {
+            Err(io::Error::other("melody generator failed"))
+        };
+        assert!(app.dispatch_with_synth(
+            Command::GenerateTrack(TrackId::Synth1), &mut no_drums, &mut failure, &mut audio,
+        ).is_err());
+        assert_eq!(app.session().last_saved().unwrap().synth1().unwrap().content, original);
+        audio.reject_queue = true;
+        let mut success = |preset, level, groove| compose(99, preset, level, groove);
+        assert!(app.dispatch_with_synth(
+            Command::GenerateTrack(TrackId::Synth1), &mut no_drums, &mut success, &mut audio,
+        ).is_err());
+        assert_eq!(app.session().last_saved().unwrap().synth1().unwrap().content, original);
+        assert_eq!(app.session().last_saved().unwrap().synth1().unwrap().source, CreationMode::User);
+    }
+
+    #[test]
+    fn ai_synth1_menu_route_generates_without_user_notes_or_drum_input() {
+        use crate::melody::compose;
+        use crate::ui::{InputEvent, MenuController};
+        let mut app = ApplicationController::new(8_000, 120.0).unwrap();
+        let mut audio = TestAudio::default();
+        let mut menu = MenuController::default();
+        menu.handle(InputEvent::CenterPressed); // PLAY settings
+        menu.handle(InputEvent::Next); // AI
+        menu.handle(InputEvent::CenterPressed); // AI menu
+        menu.handle(InputEvent::Next); // Generate Track
+        menu.handle(InputEvent::CenterPressed); // Track picker, focuses Synth 1
+        let command = menu.handle(InputEvent::CenterPressed).unwrap();
+        assert_eq!(command, Command::GenerateTrack(TrackId::Synth1));
+        let mut no_drums = || -> io::Result<GeneratedPattern> { panic!("no drums needed") };
+        let mut melody = |preset, level, rhythm| compose(12, preset, level, rhythm);
+        assert_eq!(app.dispatch_with_synth(
+            command, &mut no_drums, &mut melody, &mut audio,
+        ).unwrap(), AppResponse::Synth1Generated { notes: 8, preset: SynthPreset::Pluck });
+        assert!(app.session().last_saved().unwrap().drums().is_none());
+        assert_eq!(app.session().last_saved().unwrap().synth1().unwrap().source, CreationMode::Ai);
+        assert_eq!(audio.queued.len(), 1);
     }
 
     #[test]
