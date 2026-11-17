@@ -203,3 +203,29 @@ quit
 `center` selects/enters, `next/prev` changes focus, `back` returns up one level, and `wheel-play` triggers PLAY on Home. Regular `play`, `regenerate`, `bpm` and `kit` commands still work as shortcuts. Session state is saved **only in RAM**; it does not survive closing the process.
 
 Unit tests cover the full menu→AI drums→saved PLAY loop, generation/queue error rollback, kit/tempo preservation and unavailable synth actions. The latest integration still needs actual `cargo test` + audio playback verification on the user's Mac.
+
+## Full numerical validation against Magenta.js: all 16 × 512 probabilities
+
+New portable validator: `src/verification.rs` and `src/bin/verify_reference.rs`. A `generate_with_observer` hook exposes the entire per-step softmax probability vector on the **same inference path** as normal Rust generation. No changes to the live audio callback.
+
+Run from the repository root:
+
+```bash
+git pull --ff-only
+cargo test --locked --manifest-path experiments/drumsrnn/rust/Cargo.toml
+python3 -m http.server 8765 --bind 127.0.0.1
+```
+
+Open `http://127.0.0.1:8765/experiments/drumsrnn/reference.html` in a browser. Select **From scratch** and **Argmax**, click **Generate pattern** and then **Save JSON**. The browser should save `drumsrnn-reference.json` (usually to Downloads).
+
+In another terminal (same repository root):
+
+```bash
+cargo run --release --locked --manifest-path experiments/drumsrnn/rust/Cargo.toml \
+  --bin verify_reference -- \
+  --reference "$HOME/Downloads/drumsrnn-reference.json"
+```
+
+The program rejects stochastic/primer-based references, invalid probability matrices or wrong checkpoint metadata; checks all 8192 float32 probabilities and all 16 selected class IDs; prints maximum absolute error per step, overall RMS/mean error, worst class, counts above tolerance; exits nonzero on numerical differences. Default per-probability **absolute** tolerance is `1e-5`, adjustable with `--tolerance`.
+
+**The exhaustive comparison has not yet been run on Mac against an exported JSON**. Earlier 16-class and four-step top-five comparisons are not a substitute for it. Argmax gives a deterministic path (potentially all silence), not a proof of all stochastic input trajectories or bitwise identity.
