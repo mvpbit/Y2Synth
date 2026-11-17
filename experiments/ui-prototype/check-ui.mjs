@@ -34,8 +34,21 @@ assert.match(html, /data-native-width="480" data-native-height="360"/);
 assert.match(html, /AudioContext/);
 assert.match(html, /GENERATE TRACK/);
 assert.match(html, /fx:\{delay:true/);
+// Permanent instrument roles: Synth 1 = Pluck, Synth 2 = Pad.
+// Each synth must have its own notes and level and be visible in HOME / USER / AI.
+assert.match(html, /synth1:\{level:[^}]*notes:\[\]\}, synth2:\{level:[^}]*notes:\[\]\}/);
+assert.match(html, /state\.synth1\.notes=demoNotes\("Pluck"\)/);
+assert.match(html, /state\.synth2\.notes=demoNotes\("Pad"\)/);
+assert.match(html, /for\(const track of \["synth1","synth2"\]\)/);
+assert.match(html, /function hitSynth\(note,time,track\)/);
+assert.match(html, /function generateSynth\(track\)/);
+assert.match(html, /go\("synth1"\)/);
+assert.match(html, /go\("synth2"\)/);
+assert.match(html, /stepGrid\("SYNTH1"/);
+assert.match(html, /stepGrid\("SYNTH2"/);
+assert.doesNotMatch(html, /PRESET: PLUCK|PRESET: PAD|state\.preset|state\.synthLevel/);
 const script = html.match(/<script>([\s\S]*?)<\/script>/);
 assert.ok(script, "Inline Web Audio program not found");
 new Script(script[1], { filename: "ui-prototype-inline.js" });
 assert.equal((html.match(/<script>/g) || []).length, 1);
-console.log("OK: Y2 480×360 layout, 36+292+32 bands, HTML controls and JavaScript syntax.");
+console.log("OK: Y2 480×360 layout, 36+292+32 bands, fixed Pluck/Pad tracks and JavaScript syntax.");
