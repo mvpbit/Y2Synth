@@ -541,12 +541,12 @@ mod tests {
         patch.level = 0.5;
         app.set_synth1(patch.clone(), &mut audio).unwrap();
         let drum_before = app.session().current().drums().unwrap().content.pattern.classes.clone();
-        let mut calls = 0;
+        let calls = Cell::new(0usize);
         let mut melody = |preset: SynthPreset, level: f32, rhythm: RhythmContext| {
             assert_eq!(preset, SynthPreset::Pad);
             assert_eq!(level, 0.5);
             assert!(rhythm.kicks[0]);
-            calls += 1;
+            calls.set(calls.get() + 1);
             compose(42, preset, level, rhythm)
         };
         let mut no_drums = || -> io::Result<GeneratedPattern> { panic!("no DrumsRNN call") };
@@ -555,7 +555,7 @@ mod tests {
             &mut no_drums, &mut melody, &mut audio,
         ).unwrap();
         assert_eq!(response, AppResponse::Synth1Generated { notes: 8, preset: SynthPreset::Pad });
-        assert_eq!(calls, 1);
+        assert_eq!(calls.get(), 1);
         let saved = app.session().last_saved().unwrap();
         assert_eq!(saved.mode(), CreationMode::Ai);
         assert_eq!(saved.synth1().unwrap().source, CreationMode::Ai);
