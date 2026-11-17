@@ -58,7 +58,7 @@ quit
 
 ## Браузерный прототип интерфейса (18 ноября 2026)
 
-Для предварительного проектирования интерфейса **до получения Y2** добавлен самостоятельный [HTML/Web Audio UI prototype](experiments/ui-prototype/README.md) и [index.html](experiments/ui-prototype/index.html): экран, колесо с SELECT, PLAY/BACK, меню USER/AI, 16-шаговый индикатор/редактор барабанов, Synth 1 Pluck/Pad и единая управляемая мастер-цепочка Delay → Reverb.
+Для предварительного проектирования интерфейса **до получения Y2** добавлен [HTML/Web Audio UI prototype](experiments/ui-prototype/README.md) и [index.html](experiments/ui-prototype/index.html) с нативным дисплеем **480 × 360 px (2,4″, 4:3)** по [официальным характеристикам Innioasis](https://www.innioasis.com/a/docs/y2/specifications), колесом SELECT, PLAY/BACK, USER/AI, 16-шаговой сеткой, Pluck/Pad и общей цепочкой Delay → Reverb. Экран не масштабируется responsive-правилами: проектируем именно фиксированную 480×360 логическую сетку.
 
 Это **отдельная браузерная звуковая имитация**, не JavaScript-порт Rust, не Magenta.js DrumsRNN и не аппаратная прошивка. Задача — проверить эргономику меню и найти форму UI; браузерный запуск и качество звучания прототипа пока не подтверждены пользователем.
 
