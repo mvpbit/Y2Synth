@@ -130,6 +130,25 @@ pub fn generate(
     sampling: Sampling,
     seed: u64,
 ) -> io::Result<GeneratedPattern> {
+    generate_with_observer(network, steps, sampling, seed, |_, _| Ok(()))
+}
+
+/// The same generation path as `generate`, exposing the complete 512-class
+/// distribution before sampling on every step. The observer runs off the audio
+/// thread; normal generation does not retain full probability matrices.
+///
+/// This is particularly useful for a deterministic Argmax trace against
+/// Magenta.js `continueSequenceAndReturnProbabilities()`.
+pub fn generate_with_observer<F>(
+    network: &AttentionRnn<'_>,
+    steps: usize,
+    sampling: Sampling,
+    seed: u64,
+    mut observe: F,
+) -> io::Result<GeneratedPattern>
+where
+    F: FnMut(usize, &[f32]) -> io::Result<()>,
+{
     if steps == 0 || steps > 4096 {
         return Err(invalid("Steps must be between 1 and 4096"));
     }
@@ -157,6 +176,9 @@ pub fn generate(
             Sampling::Temperature(t) => t,
         };
         let probabilities = softmax(logits, temperature)?;
+        // Observer sees all 512 values on the exact same recurrent path
+        // as ordinary generation; no additional inference is performed.
+        observe(step, &probabilities)?;
         let selected = match sampling {
             Sampling::Argmax => argmax(logits)?,
             Sampling::Temperature(_) => draw_class(&probabilities, &mut rng)?,
