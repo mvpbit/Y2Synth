@@ -19,11 +19,12 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, Sample, SampleFormat, SizedSample, Stream, StreamConfig};
 
 use y2synth_drumsrnn_weights::{
-    application::{AppResponse, ApplicationController, AudioPort, DrumGenerator},
+    application::{AppResponse, ApplicationController, AudioPort, DrumGenerator, Synth1Generator},
     attention::AttentionRnn,
     generation::{generate, GeneratedPattern, Sampling, DRUM_PITCHES},
     kit::{pitch_by_name, DrumKit, VOICE_NAMES},
     load_checkpoint,
+    melody::{compose, RhythmContext},
     project::TrackId,
     realtime::RealtimePlayer,
     sequencer::PreparedLoop,
@@ -51,7 +52,7 @@ fn usage() {
     println!("  play | stop | bpm <40..240> | regenerate | status | quit");
     println!("  kit | level <voice> <0..1.5> | tone <voice> <0..1>");
     println!("  decay <voice> <0.5..2> | reset-kit");
-    println!("  synth1 pluck | synth1 pad | synth1 show | synth1 clear");
+    println!("  synth1 pluck | synth1 pad | synth1 generate | synth1 show | synth1 clear");
     println!("  synth1 level <0..1> | synth1 note <step 0..15> <MIDI 36..96> <length 1..16>");
     println!("  menu | center | next | prev | back | wheel-play");
     println!("  (menu commands simulate the Y2 wheel; 'play' works anywhere)");
@@ -179,15 +180,16 @@ impl AudioPort for LiveAudio<'_> {
     }
 }
 
-fn apply_command<G: DrumGenerator>(
+fn apply_command<G: DrumGenerator, S: Synth1Generator>(
     app: &mut ApplicationController,
     command: MenuCommand,
-    generator: &mut G,
+    drum_generator: &mut G,
+    synth_generator: &mut S,
     input: &mut Input<PreparedLoop>,
     playing: &Arc<AtomicBool>,
 ) -> io::Result<AppResponse> {
     let mut audio = LiveAudio { input, playing };
-    app.dispatch(command, generator, &mut audio)
+    app.dispatch_with_synth(command, drum_generator, synth_generator, &mut audio)
 }
 
 fn describe_result(result: AppResponse) {
@@ -197,6 +199,11 @@ fn describe_result(result: AppResponse) {
         }
         AppResponse::DrumGenerated { hits } => {
             println!("AI: {hits} drum hits; new loop queued and saved in RAM.");
+        }
+        AppResponse::Synth1Generated { notes, preset } => {
+            println!("AI composer: {notes} notes for Synth 1 / {} (procedural, not ML).",
+                preset.name());
+            println!("New musical phrase queued for next bar and saved in RAM.");
         }
         AppResponse::EditDrums => {
             println!("Drums editor: kit | level kick 0.5 | tone snare 0.8 | decay chh 1.5");
@@ -304,12 +311,23 @@ fn run() -> Result<(), Box<dyn Error>> {
         seed.set(next_seed);
         Ok(pattern)
     };
+    // Separate seed sequence for composed melodic phrases; does not alter the
+    // seed progression or checkpoint state of the existing DrumsRNN generator.
+    let melody_seed = Cell::new(options.seed ^ 0xa57d_3e12_5b42_c908);
+    let mut synth_generator = |preset: SynthPreset, level: f32, rhythm: RhythmContext|
+        -> io::Result<SynthTrack> {
+        let next_seed = melody_seed.get().wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let phrase = compose(next_seed, preset, level, rhythm)?;
+        melody_seed.set(next_seed);
+        Ok(phrase)
+    };
     let mut menu = MenuController::default();
 
     println!();
-    println!("Ready. Enter: play | stop | regenerate | bpm 120 | kit | synth1 pluck | synth1 pad | menu | help | quit");
+    println!("Ready: play | stop | regenerate | synth1 generate | synth1 pluck | synth1 pad | menu | help | quit");
     println!("Wheel simulation: center | next | prev | back | wheel-play");
-    println!("New AI loops and user kit edits are saved in RAM, not to disk.");
+    println!("DrumsRNN: neural AI; Synth 1: autonomous rule-based melodic composer.");
+    println!("New loops and edits are saved in RAM, not to disk.");
     let stdin = io::stdin();
     let mut lines = stdin.lock();
     loop {
@@ -323,7 +341,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         match words.as_slice() {
             ["play"] => {
                 let result = apply_command(
-                    &mut app, MenuCommand::PlayLast, &mut drum_generator,
+                    &mut app, MenuCommand::PlayLast, &mut drum_generator, &mut synth_generator,
                     &mut input, &playing,
                 )?;
                 describe_result(result);
@@ -335,7 +353,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             ["regenerate"] => {
                 let result = apply_command(
                     &mut app, MenuCommand::GenerateTrack(TrackId::Drums),
-                    &mut drum_generator, &mut input, &playing,
+                    &mut drum_generator, &mut synth_generator, &mut input, &playing,
                 )?;
                 describe_result(result);
                 if let Some(drums) = app.session().current().drums() {
@@ -370,6 +388,14 @@ fn run() -> Result<(), Box<dyn Error>> {
                 app.set_synth1(synth, &mut audio)?;
                 println!("Synth 1: {} melodic phrase queued for next bar; saved in RAM.",
                     preset.name());
+                show_synth1(&app);
+            }
+            ["synth1", "generate"] => {
+                let result = apply_command(
+                    &mut app, MenuCommand::GenerateTrack(TrackId::Synth1),
+                    &mut drum_generator, &mut synth_generator, &mut input, &playing,
+                )?;
+                describe_result(result);
                 show_synth1(&app);
             }
             ["synth1", "show"] => show_synth1(&app),
@@ -467,9 +493,12 @@ fn run() -> Result<(), Box<dyn Error>> {
                 };
                 if let Some(command) = menu.handle(event) {
                     let result = apply_command(
-                        &mut app, command, &mut drum_generator, &mut input, &playing,
+                        &mut app, command, &mut drum_generator, &mut synth_generator, &mut input, &playing,
                     )?;
                     describe_result(result);
+                    if let AppResponse::Synth1Generated { .. } = result {
+                        show_synth1(&app);
+                    }
                     if let AppResponse::DrumGenerated { .. } = result {
                         if let Some(drums) = app.session().current().drums() {
                             show_pattern(&drums.content.pattern, seed.get());
