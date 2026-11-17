@@ -5,6 +5,7 @@
 pub mod lstm;
 pub mod attention;
 pub mod generation;
+pub mod verification;
 pub mod audio;
 pub mod kit;
 pub mod dsp;
