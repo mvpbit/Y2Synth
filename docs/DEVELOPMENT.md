@@ -353,3 +353,62 @@ quit
 ```
 
 Команда `synth1 pluck` или `synth1 pad` **заменяет USER-клип** демонстрационной фразой и тембром (не переключает только осциллятор поверх произвольного существующего клипа). `synth1 clear` глушит ноты Synth 1, не удаляя барабаны. `synth1 note` добавляет событие в 16-шаговую последовательность. Сохранение пока **только в RAM**. Нужно проверить отсутствие падений/NaN, слышимость обоих пресетов, баланс с Drums, отсутствие артефактов на тактовых границах. На Y2Linux производительность пока неизвестна; не выдавать за production DSP.
+
+
+## Автономная генерация Synth 1 (2026-11-17; код добавлен, нужен Mac-прогон)
+
+Пользователь уточнил требование: **Synth 1 должен сам генерировать мелодии**, а не только исполнять заранее введённые партии. Реализован отдельный переносимый модуль `src/melody.rs`, не изменяющий тембры Pluck/Pad и real-time callback. Это **музыкальный алгоритм, а не обученная нейросеть**; не называть его ML-инференсом.
+
+- Минорная тональность с несколькими выбранными от seed тониками, гармония i→VI/iv/VII, мотив и ответ из двух половин 16-шагового такта, тональные опорные звуки и умеренная ритмическая вариативность.
+- **Pluck:** восемь нот в форме двух связанных мотивов; **Pad:** две четырёхзвучные гармонии по 8 шагов. Сохраняются выбранный `SynthPreset` и уровень USER/AI-трека.
+- `RhythmContext::from_drums` использует реальные события kick/snare/hat уже имеющегося `GeneratedPattern`, чтобы выбирать акцентные моменты; с отсутствующей или тихой дорожкой Drums композитор тоже работает.
+- В `src/application.rs` добавлен порт `Synth1Generator` и полноценный `dispatch_with_synth` для `Command::GenerateTrack(TrackId::Synth1)`. Новая дорожка публикуется вместе с текущими барабанами в готовом PCM-такте и только после успешного `AudioPort::queue_bar` попадает в RAM-снимок с `CreationMode::Ai`. Генерация не запускает PLAY; воспроизведение сохранённого не вызывает генераторы. `GenerateAll` и Synth 2 пока не реализованы. Предыдущий `dispatch` оставлен для совместимости с Drums-only клиентами.
+- `src/bin/live.rs` содержит собственный независимый seed-счётчик мелодий, команду `synth1 generate` и подключение **AI → Generate Track → Synth 1**. Не вмешивается в DrumsRNN seed. Существующие `synth1 pluck` и `synth1 pad` выбирают тембр вместе с DEMO-фразой, после чего `synth1 generate` заменяет ноты новым материалом, сохраняя тембр/уровень.
+- Тесты `melody.rs`: фиксированный seed, вариативность, валидные ноты на множестве seeds, два аккорда Pad, влияние ритмического контекста, неверный уровень. В `application.rs`: замена только Synth 1, PLAY без перегенерации, работа без Drums, откат при ошибке генератора/аудиопорта, навигация AI-меню.
+
+**Статус:** исходники закоммичены в `main`, **новая сборка и живое прослушивание на Mac Studio ещё не подтверждены**. Предыдущее успешное пользовательское прослушивание относилось к USER Pluck/Pad, до добавления композитора.
+
+### Проверка на Mac Studio
+
+В корне `Y2Synth`:
+
+```bash
+git pull --ff-only
+cargo test --locked --manifest-path experiments/drumsrnn/rust/Cargo.toml --features live-audio
+cargo run --release --locked --manifest-path experiments/drumsrnn/rust/Cargo.toml \
+  --features live-audio --bin live -- --bpm 120 --temperature 1.2
+```
+
+В `y2>`:
+
+```text
+play
+synth1 pluck
+synth1 generate
+synth1 show
+synth1 generate
+synth1 pad
+synth1 generate
+synth1 show
+stop
+play
+quit
+```
+
+Через симуляцию Y2-колеса:
+
+```text
+menu
+center      # Play Settings
+next        # AI
+center      # AI menu
+next        # Generate Track
+center      # Select track (Synth 1)
+center      # Generate only Synth 1
+back
+back
+back        # Home
+wheel-play  # Replay last saved mix, no generation
+```
+
+При запуске зафиксировать реальный результат компиляции/тестов, слышимый Pluck/Pad, сохранность Drums при повторной генерации Synth 1, отсутствие нежелательных щелчков на границе такта. При возникновении Rust ошибок — исправить по фактическому логу. Веса DrumsRNN нужны для текущего `live` CLI; сама функция `compose` не требует checkpoint.
