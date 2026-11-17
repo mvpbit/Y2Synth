@@ -134,4 +134,4 @@ These checks are **diagnostic**: the forced input classes are not user performan
 
 The physical Y2 has not been characterized. After it arrives, investigate SoC/ABI, available Linux and audio backend, memory, CPU cost of DrumsRNN and the 12-pass FX pre-render, xrun/latency, wheel/display interface and project file persistence. No claim of embedded compatibility or production real-time safety is justified yet.
 
-See [project README](../../../../README.md), [ARCHITECTURE](../../../../docs/ARCHITECTURE.md), [ROADMAP](../../../../docs/ROADMAP.md) and [DEVELOPMENT](../../../../docs/DEVELOPMENT.md).
+See [project README](../../../README.md), [ARCHITECTURE](../../../docs/ARCHITECTURE.md), [ROADMAP](../../../docs/ROADMAP.md) and [DEVELOPMENT](../../../docs/DEVELOPMENT.md).
