@@ -560,6 +560,31 @@ mod tests {
     }
 
     #[test]
+    fn master_fx_applies_to_drums_only_and_synth_only() {
+        use crate::synth1::{SynthPreset, SynthTrack};
+        // Drum-only audio is affected, even before a synth has been created.
+        let mut drums_app = ApplicationController::new(8_000, 120.0).unwrap();
+        let mut drums_audio = TestAudio::default();
+        drums_app.install_initial_drums(pattern(36), DrumKit::default(), &mut drums_audio).unwrap();
+        drums_app.set_master_fx(MasterEffects::dry(), &mut drums_audio).unwrap();
+        let drums_dry = drums_audio.queued.last().unwrap().samples.clone();
+        drums_app.set_master_fx(MasterEffects::default(), &mut drums_audio).unwrap();
+        assert_ne!(drums_audio.queued.last().unwrap().samples, drums_dry);
+        assert!(drums_app.session().current().synth1().is_none());
+
+        // Synth-only audio is also processed, even without DrumsRNN.
+        let mut synth_app = ApplicationController::new(8_000, 120.0).unwrap();
+        let mut synth_audio = TestAudio::default();
+        synth_app.set_synth1(SynthTrack::demo(SynthPreset::Pluck), &mut synth_audio).unwrap();
+        synth_app.set_master_fx(MasterEffects::dry(), &mut synth_audio).unwrap();
+        let synth_dry = synth_audio.queued.last().unwrap().samples.clone();
+        synth_app.set_master_fx(MasterEffects::default(), &mut synth_audio).unwrap();
+        assert_ne!(synth_audio.queued.last().unwrap().samples, synth_dry);
+        assert!(synth_app.session().current().drums().is_none());
+        assert_eq!(synth_app.session().last_saved().unwrap().master_fx(), MasterEffects::default());
+    }
+
+    #[test]
     fn master_fx_processes_whole_mix_and_is_saved_for_play_and_tempo_changes() {
         use crate::synth1::{SynthPreset, SynthTrack};
         let mut app = ApplicationController::new(8_000, 120.0).unwrap();
