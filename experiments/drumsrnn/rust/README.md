@@ -229,3 +229,31 @@ cargo run --release --locked --manifest-path experiments/drumsrnn/rust/Cargo.tom
 The program rejects stochastic/primer-based references, invalid probability matrices or wrong checkpoint metadata; checks all 8192 float32 probabilities and all 16 selected class IDs; prints maximum absolute error per step, overall RMS/mean error, worst class, counts above tolerance; exits nonzero on numerical differences. Default per-probability **absolute** tolerance is `1e-5`, adjustable with `--tolerance`.
 
 **Mac Studio verification confirmed on 2026-11-17:** `verify_reference` with exported Magenta.js `@magenta/music@1.23.1` JSON (TF.js WebGL) reported **PASS** for all `16 × 512 = 8192` probabilities. Maximum absolute difference `1.192092896e-6`, mean `1.529578996e-9`, RMS `2.754894988e-8`; `0/8192` values above the `1e-5` tolerance and `0/16` class mismatches. The 16 selected Argmax classes were all zero (silence), so this verifies **one deterministic recurrent trajectory**, not nonzero/forced trajectories, all stochastic input paths, or bitwise equality.
+
+
+## Forced nonzero history verification (diagnostic mode)
+
+The full 8192-value scratch/Argmax comparison passed on Mac Studio, but its 16 selected classes were all **silent**. A second, independent diagnostic now feeds the **same nonzero previous drum classes** to both implementations and compares *all 512 outputs at every step*.
+
+We deliberately do **not** patch Magenta.js internals or contaminate normal autonomous generation. The browser calls the original `MusicRNN.continueSequenceAndReturnProbabilities(prefix, 1)` for each growing prefix of a fixed 15-class history, starting with one silent bootstrap. Rust's `verification::infer_teacher_forced` runs the same 16-step sequence of recurrent updates. The JSON carries `traceMode: teacher_forced`, 15 `forcedClassIds`, 16 predicted `sampledClassIds`, and `probabilities` (16 × 512). Legacy JSON exports without `traceMode` remain valid.
+
+From the repository root, first start the local server:
+
+```bash
+git pull --ff-only
+cargo test --locked --manifest-path experiments/drumsrnn/rust/Cargo.toml
+python3 -m http.server 8765 --bind 127.0.0.1
+```
+
+Open `http://127.0.0.1:8765/experiments/drumsrnn/teacher-forcing.html`, click **Generate 16 × 512 reference** and **Save JSON**.
+
+In another terminal:
+
+```bash
+cargo run --release --locked \
+  --manifest-path experiments/drumsrnn/rust/Cargo.toml \
+  --bin verify_reference -- \
+  --reference "$HOME/Downloads/drumsrnn-teacher-forced.json"
+```
+
+The default per-value absolute tolerance is `1e-5`. The tool prints the same per-step error matrix and PASS/FAIL as the previous scratch/Argmax verifier, plus the exact forced input class sequence. A PASS confirms numerical agreement **on this one fixed nonzero history**, not on every possible input. This latest diagnostic path is **not yet compiled or run on Mac** and requires user verification.
