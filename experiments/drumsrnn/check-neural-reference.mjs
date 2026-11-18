@@ -33,6 +33,7 @@ try {
   const tokens=result.probs.map(p=>p.indexOf(Math.max(...p)));
   await result.sequence;melody.dispose();
   const pad=new music_vae.MusicVAE(location.origin+"/multitrack_chords_tfjs");
+  await pad.initialize();
   const z=Array.from({length:256},(_,i)=>Math.fround(Math.sin(i*.37)*.75));
   const latent=tf.tensor2d([z]);
   const decoded=await pad.decodeTensors(latent,undefined,{chordProgression:["Cm"]});

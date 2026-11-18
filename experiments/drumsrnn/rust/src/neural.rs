@@ -202,13 +202,14 @@ pub fn multitrack_track(tokens: &[usize], level: f32) -> io::Result<SynthTrack> 
 }
 /// Lazily loaded model instances have independent random streams and fixed roles.
 pub struct NeuralSynths {
-    root: PathBuf, melody: Option<Checkpoint>, pad: Option<Checkpoint>, seed: u64,
+    root: PathBuf, melody: Option<Checkpoint>, pad: Option<Checkpoint>, melody_seed: u64, pad_seed: u64,
 }
 impl NeuralSynths {
-    pub fn new(root: impl Into<PathBuf>, seed: u64) -> Self { Self {root:root.into(),melody:None,pad:None,seed} }
+    pub fn new(root: impl Into<PathBuf>, seed: u64) -> Self { Self {root:root.into(),melody:None,pad:None,melody_seed:seed,pad_seed:seed ^ 0x504144} }
     pub fn generate(&mut self, preset: SynthPreset, level: f32) -> io::Result<SynthTrack> {
-        self.seed = self.seed.wrapping_add(0x9e3779b97f4a7c15);
-        let seed = self.seed;
+        let state = match preset { SynthPreset::Pluck => &mut self.melody_seed, SynthPreset::Pad => &mut self.pad_seed };
+        *state = state.wrapping_add(0x9e3779b97f4a7c15);
+        let seed = *state;
         let (slot,name) = match preset {
             SynthPreset::Pluck => (&mut self.melody,"melody_rnn"),
             SynthPreset::Pad => (&mut self.pad,"multitrack_chords"),
