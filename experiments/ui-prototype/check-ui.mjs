@@ -32,7 +32,7 @@ for (const { selector, height } of sizes) {
 assert.equal(sizes.reduce((total, item) => total + item.height, 0), 360);
 assert.match(html, /data-native-width="480" data-native-height="360"/);
 assert.match(html, /AudioContext/);
-assert.match(html, /AI-generated/);
+assert.match(html, /GENERATE PLUCK/);
 assert.match(html, /fx:\{delay:true/);
 // Click wheel hardware geometry: all controls are integrated in one ring.
 for (const id of ["wheel", "return", "prev", "next", "play", "center"]) {
