@@ -10,11 +10,12 @@ command -v shasum >/dev/null || { echo "Error: shasum is required" >&2; exit 1; 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 model_name="${1:-drum_kit_rnn}"
 case "$model_name" in
-  drum_kit_rnn|melody_rnn) ;;
-  *) echo "Usage: $0 [drum_kit_rnn|melody_rnn]" >&2; exit 1 ;;
+  drum_kit_rnn|melody_rnn) family="music_rnn" ;;
+  multitrack_chords) family="music_vae" ;;
+  *) echo "Usage: $0 [drum_kit_rnn|melody_rnn|multitrack_chords]" >&2; exit 1 ;;
 esac
 model_dir="$script_dir/models/${model_name}_tfjs"
-base_url="https://storage.googleapis.com/magentadata/js/checkpoints/music_rnn/$model_name"
+base_url="https://storage.googleapis.com/magentadata/js/checkpoints/$family/$model_name"
 
 mkdir -p "$model_dir"
 
@@ -52,8 +53,8 @@ import sys
 
 folder = pathlib.Path(sys.argv[1])
 config = json.loads((folder / "config.json").read_text())
-if config.get("type") != "MusicRNN":
-    raise SystemExit("Unexpected checkpoint type (expected MusicRNN)")
+if config.get("type") not in ("MusicRNN", "MusicVAE"):
+    raise SystemExit("Unexpected checkpoint type (expected MusicRNN or MusicVAE)")
 manifest = json.loads((folder / "weights_manifest.json").read_text())
 if not isinstance(manifest, list) or not manifest:
     raise SystemExit("Missing/invalid weights manifest groups")
