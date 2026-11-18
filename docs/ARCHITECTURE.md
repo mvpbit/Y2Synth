@@ -1,5 +1,29 @@
 # Архитектура Y2Synth
 
+## Текущая архитектура — 18 ноября 2026
+
+```text
+drum_kit_rnn → AttentionRnn → DrumTrack ───────┐
+melody_rnn → 2×512 LSTM → PLUCK SynthTrack ────┼→ mono mix → Delay → Reverb → PCM
+multitrack_chords → conductor/core → PAD ─────┘
+```
+
+В Rust `neural.rs` содержит прямой инференс двух новых checkpoint, без JS-процесса или сетевой службы. MelodyRNN использует 130 классов (hold/off/128 pitches). MusicVAE: latent 256, conductor 3×256, восемь сегментов, core 3×256, 490 performance-классов, 49 chord controls. Начальные LSTM-состояния получаются dense+tanh; последний токен предыдущего сегмента передаётся следующему. Шагов токенов 512, музыкальная сетка 96/такт.
+
+`load_checkpoint_filtered` читает float32 и uint8/uint16 quantization, проверяет пути/размеры/конечность и не размещает неиспользуемые encoder-тензоры PAD в памяти. Это scalar reference implementation; ARM-оптимизация и аппаратная пригодность не доказаны.
+
+`NeuralSynths` лениво держит отдельные checkpoints и RNG PLUCK/PAD. Автономная генерация не требует начальных нот. MelodyRNN даёт монофонию; PAD выбирает одну полифоническую небарабанную партию, переводит 96 → 16 шагов, ограничивает шесть голосов/48 нот. Пустой результат повторяется до трёх раз, затем возвращается ошибка без процедурной подмены.
+
+В `AppProject` оба слота — реальные `SynthTrack`. `dispatch_neural` фиксирует Synth1=PLUCK, Synth2=PAD; `prepare_three_track_loop` смешивает три дорожки до единого master FX. Старый dispatcher сохранён для совместимости. Генерация, render и master FX остаются на control thread; CPAL callback и triple-buffer handoff не изменены. Publish/save атомарны при ошибках.
+
+Браузер использует отдельный Web Audio DSP и официальный Magenta.js/TF.js в worker. Lazy download, async status, timeout, защита от устаревших ответов и применение на границе такта отделены от UI. `neural-common.js` преобразует NoteSequence в формат дорожек. Pages публикует HTML и два JS-файла, а не веса. Постоянного offline-кэша нет.
+
+Проверки: release Rust tests с live-audio, fixture-тесты квантования и полифонии, атомарность двух дорожек; удалённый Chromium/Magenta.js oracle сравнивает Argmax-траектории. Это не доказательство эквивалентности всех входов и не аппаратный бенчмарк.
+
+## Историческая архитектура на 17 ноября 2026
+
+Следующий раздел сохранён как описание предыдущей версии. Его утверждения об одном Synth 1, отсутствии Synth 2 и процедурном live AI заменены текущей схемой выше; границы realtime и устройство DSP остаются актуальны.
+
 **Состояние: 17 ноября 2026.** Это архитектура **экспериментального работающего на Mac Studio** аудиодвижка, не готовая прошивка для Innioasis Y2. Пользователь подтвердил работу Synth 1 и одобрил усиленную мастер-цепочку Delay/Reverb. Профилирование и реальная Y2-совместимость ещё впереди.
 
 ## Аудиопайплайн
