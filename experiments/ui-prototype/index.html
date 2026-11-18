@@ -403,7 +403,7 @@ const choices={
     {label:"TEMPO",sub:state.bpm+" BPM",action:()=>go("tempo")},
   ],
   pluck:()=>[
-    {label:"GENERATE MELODY",sub:"AI-generated · "+(hasPad()?"Follows PAD":"Generate PAD first"),disabled:state.generating||!hasPad(),action:()=>{generateInstrument("pluck");render();}},
+    {label:"GENERATE PLUCK",disabled:state.generating||!hasPad(),action:()=>{generateInstrument("pluck");render();}},
     {label:"LEVEL",sub:"◀ / ▶ · Pluck level",value:format(state.pluck.level),key:"pluckLevel"},
   ],
   pad:()=>[
