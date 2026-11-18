@@ -32,7 +32,7 @@ for (const { selector, height } of sizes) {
 assert.equal(sizes.reduce((total, item) => total + item.height, 0), 360);
 assert.match(html, /data-native-width="480" data-native-height="360"/);
 assert.match(html, /AudioContext/);
-assert.match(html, /GENERATE TRACK/);
+assert.match(html, /AI-GENERATED/);
 assert.match(html, /fx:\{delay:true/);
 // Click wheel hardware geometry: all controls are integrated in one ring.
 for (const id of ["wheel", "return", "prev", "next", "play", "center"]) {
@@ -56,29 +56,21 @@ assert.match(html, /longPressTimeout=setTimeout/);
 // Instrument keys are stable, semantic and shared across state, routes,
 // the sequencer, generators and the audio scheduler. Do not alias to synth1/2.
 assert.match(html, /pluck:\{level:[^}]*notes:\[\]\}, pad:\{level:[^}]*notes:\[\]\}/);
-assert.match(html, /state\.pluck\.notes=demoNotes\("pluck"\)/);
-assert.match(html, /state\.pad\.notes=demoNotes\("pad"\)/);
 assert.match(html, /for\(const track of \["pluck","pad"\]\)/);
 assert.match(html, /function playInstrumentNote\(note,time,instrument\)/);
 assert.match(html, /function generateInstrument\(instrument\)/);
-assert.match(html, /function restoreDemo\(instrument\)/);
-assert.match(html, /state\[instrument\]\.notes=demoNotes\(instrument\)/);
 assert.match(html, /go\("pluck"\)/);
 assert.match(html, /go\("pad"\)/);
-assert.match(html, /stepGrid\("PLUCK"[^;]*,"pluck"\)/);
-assert.match(html, /stepGrid\("PAD"[^;]*,"pad"\)/);
-assert.match(html, /\{label:"PLUCK",sub:"Melody/);
-assert.match(html, /\{label:"PAD",sub:"Chords/);
 assert.match(html, /pluck:"PLUCK",pad:"PAD"/);
-assert.match(html, /<span class="chip">PLUCK<\/span>/);
-assert.match(html, /<span class="chip">PAD<\/span>/);
+assert.match(html, /data-transport/);
+assert.doesNotMatch(html, /demoNotes|restoreDemo|stepGrid|data-voice|data-step|label:"USER"|seekStep/);
 assert.doesNotMatch(html, /synth1|synth2|hitSynth|generateSynth|PRESET: PLUCK|PRESET: PAD|state\.preset|state\.synthLevel|label:"SYNTH ?[12]"/i);
 const script = html.match(/<script>([\s\S]*?)<\/script>/);
 assert.ok(script, "Inline Web Audio program not found");
 new Script(script[1], { filename: "ui-prototype-inline.js" });
 assert.equal((html.match(/<script>/g) || []).length, 1);
 // A DOM-light runtime smoke test catches errors static matching cannot:
-// both instruments must be independently generated and Pad demo must be chords.
+// the home screen is transport-only and all instrument notes come from AI.
 const elements = new Map();
 const document = {
   getElementById(id) {
@@ -101,6 +93,22 @@ const document = {
 };
 await runInNewContext("(async()=>{\n" + script[1] + String.raw`
 const assertRuntime=(ok,message)=>{if(!ok)throw Error(message);};
+assertRuntime(!hasMusic(),"Fresh session must not contain demo notes");
+await transport();
+assertRuntime(!state.playing&&audio.ctx===null,"Empty PLAY must not start audio");
+const homeMarkup=renderHome();
+assertRuntime((homeMarkup.match(/<button/g)||[]).length===1&&homeMarkup.includes("data-transport"),"HOME must contain only the transport button");
+assertRuntime(!homeMarkup.includes("data-step")&&!homeMarkup.includes("seq-row"),"HOME must not render a note grid");
+assertRuntime(choices.settings()[0].label==="AI-GENERATED","AI-only settings entry");
+for(const instrument of ["pluck","pad","drums"]){
+  assertRuntime(choices[instrument]()[0].sub.startsWith("AI-generated"),"Instrument must be AI-generated");
+  assertRuntime(choices[instrument]().every(row=>row.label.startsWith("GENERATE")||row.label==="LEVEL"),"No manual notes/demo controls");
+}
+assertRuntime(choices.fx().map(row=>row.key).join(",")==="delay,delaySteps,delayFeedback,delayWet,reverb,reverbSize,reverbDamping,reverbWet","FX controls must stay intact");
+activate();activate();activate();
+assertRuntime(state.page==="pluck","OK navigation must reach PLUCK");
+back();assertRuntime(state.page==="instruments","BACK must return to instrument picker");
+home();
 const pluckBefore=JSON.stringify(state.pluck.notes),drumsBefore=JSON.stringify(state.drums);
 const samplePad=[{step:0,pitch:60,len:16,velocity:.7},{step:0,pitch:63,len:16,velocity:.7},{step:0,pitch:67,len:16,velocity:.7}];
 let pending=generateInstrument("pad");
@@ -119,15 +127,15 @@ pending=generateInstrument("pluck");
 neuralWorker.onmessage({data:{id:neuralJob.id,pattern:[{step:17,pitch:60,len:1,velocity:.7}]}});
 assertRuntime(await pending===false,"Invalid notes accepted");
 pending=generateInstrument("pad");
-restoreDemo("pad");
-const demoPad=JSON.stringify(state.pad.notes);
+++trackRevision.pad;
+const savedPad=JSON.stringify(state.pad.notes);
 neuralWorker.onmessage({data:{id:neuralJob.id,pattern:samplePad,model:"multitrack_chords"}});
-assertRuntime(await pending===false&&JSON.stringify(state.pad.notes)===demoPad,"Stale AI overwrote USER demo");
+assertRuntime(await pending===false&&JSON.stringify(state.pad.notes)===savedPad,"Stale AI replaced the saved phrase");
 state.playing=true;
 pending=generateInstrument("pad");
 neuralWorker.onmessage({data:{id:neuralJob.id,pattern:samplePad,model:"multitrack_chords"}});
 assertRuntime(await pending,"Queued generation failed");
-assertRuntime(JSON.stringify(state.pad.notes)===demoPad,"Pattern changed before bar boundary");
+assertRuntime(JSON.stringify(state.pad.notes)===savedPad,"Pattern changed before bar boundary");
 applyPendingPatterns();
 assertRuntime(JSON.stringify(state.pad.notes)===JSON.stringify(samplePad),"Queued pattern lost");
 state.playing=false;
@@ -135,7 +143,7 @@ pending=generateDrums();
 neuralWorker.onerror();
 assertRuntime(await pending===false&&!state.generating&&neuralWorker===null,"Worker crash did not recover");
 assertRuntime(JSON.stringify(state.drums)===drumsBefore,"Worker failure changed drums");
-restoreDemo("pluck");restoreDemo("pad");
+
 // Exercise real note scheduling with silent test doubles. Short Pad gates at
 // high BPM must not put the sustain event before the end of the attack.
 const envelopes=[];
@@ -178,10 +186,10 @@ audio.ctx=null;state.bpm=120;
 home();
 wheelTurn(1);
 if (state.page !== "settings" || state.focus !== 0) throw new Error("Home wheel navigation");
-wheelTurn(2);
-if (state.focus !== 2) throw new Error("Clockwise scroll should select FX");
+wheelTurn(1);
+if (state.focus !== 1) throw new Error("Clockwise scroll should select FX");
 wheelTurn(-1);
-if (state.focus !== 1) throw new Error("Anticlockwise scroll should select AI");
+if (state.focus !== 0) throw new Error("Anticlockwise scroll should select AI-generated");
 go("tempo");
 if (state.editing) throw new Error("New page must exit edit mode");
 activate();
@@ -194,7 +202,7 @@ if (state.editing) throw new Error("Second OK must finish numeric editing");
 home();
 const stepBefore = state.playhead;
 leftRight(1);
-if (state.playhead !== (stepBefore + 1) % 16) throw new Error("NEXT must advance step");
+if (state.playhead !== stepBefore || state.page !== "settings") throw new Error("NEXT must open settings without seeking notes");
 // Test a clockwise quadrant drag through the exposed ring.
 home();
 const rect = {left:0,top:0,width:340,height:340};
@@ -205,7 +213,7 @@ const touch = {pointerId:7,clientX:320,clientY:170,preventDefault(){},
 startWheelGesture(touch);
 if (!wheelMotion.active) throw new Error("Drag did not start");
 moveWheelGesture({...touch,clientX:170,clientY:320});
-if (state.page !== "settings" || state.focus !== 3) {
+if (state.page !== "settings" || state.focus !== 0) {
   throw new Error("Clockwise drag must scroll multiple menu steps");
 }
 finishWheelGesture(touch);
