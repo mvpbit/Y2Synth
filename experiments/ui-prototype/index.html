@@ -402,7 +402,7 @@ const choices={
     {label:"LEVEL",sub:"◀ / ▶ · Pluck level",value:format(state.pluck.level),key:"pluckLevel"},
   ],
   pad:()=>[
-    {label:"GENERATE CHORDS",sub:"AI-generated · Random major / minor key",disabled:state.generating,action:()=>{generateInstrument("pad");render();}},
+    {label:"GENERATE PAD",disabled:state.generating,action:()=>{generateInstrument("pad");render();}},
     {label:"LEVEL",sub:"◀ / ▶ · Pad level",value:format(state.pad.level),key:"padLevel"},
   ],
   drums:()=>[
