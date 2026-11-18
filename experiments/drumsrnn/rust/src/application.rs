@@ -4,17 +4,15 @@
 //! executes operations, prepares a complete PCM bar and publishes it through
 //! AudioPort; the real-time callback remains independent.
 //!
-//! DrumsRNN and the USER Pluck/Pad synth are implemented. A separate seeded
-//! musical composer now provides AI-MENU phrase generation for Synth 1; it
-//! is procedural, NOT a trained neural network. Synth 2 and Generate All
-//! are still explicitly unimplemented.
+//! Three independent tracks share a single master FX chain. Neural services
+//! run outside the audio callback; publish/save is atomic.
 
 use crate::generation::GeneratedPattern;
 use crate::kit::DrumKit;
 use crate::master_fx::{render_master_bar, MasterEffects};
 use crate::melody::RhythmContext;
 use crate::project::{CreationMode, MusicProject, MusicSession, TrackId};
-use crate::sequencer::{prepare_project_loop, PreparedLoop};
+use crate::sequencer::{prepare_three_track_loop, PreparedLoop};
 use crate::synth1::{SynthPreset, SynthTrack};
 use crate::ui::Command;
 use std::io;
@@ -30,8 +28,8 @@ pub struct DrumTrack {
     pub kit: DrumKit,
 }
 
-pub type AppProject = MusicProject<SynthTrack, UnavailableSynth, DrumTrack>;
-pub type AppSession = MusicSession<SynthTrack, UnavailableSynth, DrumTrack>;
+pub type AppProject = MusicProject<SynthTrack, SynthTrack, DrumTrack>;
+pub type AppSession = MusicSession<SynthTrack, SynthTrack, DrumTrack>;
 
 /// A port for any platform's non-RT output handoff. Implementation lives
 /// in the live application, not in the portable coordinator.
@@ -83,6 +81,8 @@ pub enum AppResponse {
     EditDrums,
     /// First USER synthesizer: Pluck/Pad and note editor on the control thread.
     EditSynth1,
+    EditSynth2,
+    Synth2Generated { notes: usize },
     NotImplemented(&'static str),
     NothingSaved,
 }
@@ -110,7 +110,8 @@ impl ApplicationController {
         let drums = project.drums()
             .map(|track| (&track.content.pattern, &track.content.kit));
         let synth1 = project.synth1().map(|track| &track.content);
-        let mut bar = prepare_project_loop(drums, synth1, project.bpm(), self.sample_rate)?;
+        let synth2 = project.synth2().map(|track| &track.content);
+        let mut bar = prepare_three_track_loop(drums, synth1, synth2, project.bpm(), self.sample_rate)?;
         // A single serial insert after all track mixing: Drums + Synths
         // -> tempo-synced delay -> room reverb -> ready PCM loop.
         bar.samples = render_master_bar(
@@ -223,6 +224,56 @@ impl ApplicationController {
             return Ok(AppResponse::Synth1Generated { notes: note_count, preset });
         }
         self.dispatch(command, drums, audio)
+    }
+
+    /// Live three-track route. Slot identities fix the instrument and model;
+    /// the legacy dispatcher remains available for older experiments.
+    pub fn dispatch_neural<G: DrumGenerator, S: Synth1Generator, A: AudioPort>(
+        &mut self, command: Command, drums: &mut G, synth: &mut S, audio: &mut A,
+    ) -> io::Result<AppResponse> {
+        let target = match command {
+            Command::GenerateTrack(TrackId::Synth1) => Some((TrackId::Synth1, SynthPreset::Pluck)),
+            Command::GenerateTrack(TrackId::Synth2) => Some((TrackId::Synth2, SynthPreset::Pad)),
+            Command::EditUserTrack(TrackId::Synth2) => return Ok(AppResponse::EditSynth2),
+            _ => None,
+        };
+        if let Some((id, preset)) = target {
+            let existing = if id == TrackId::Synth1 { self.session.current().synth1() }
+                else { self.session.current().synth2() };
+            let level = existing.map(|t| t.content.level).unwrap_or(0.75);
+            let rhythm = RhythmContext::from_drums(self.session.current().drums().map(|t| &t.content.pattern));
+            let track = synth.generate_synth1(preset, level, rhythm)?;
+            track.validate()?;
+            if track.preset != preset || track.level != level || track.notes.is_empty() {
+                return Err(invalid("Neural service returned an invalid instrument, level or empty phrase"));
+            }
+            let notes = track.notes.len();
+            if id == TrackId::Synth1 {
+                self.replace_synth1(track, CreationMode::Ai, audio)?;
+                return Ok(AppResponse::Synth1Generated { notes, preset });
+            }
+            self.replace_synth2(track, CreationMode::Ai, audio)?;
+            return Ok(AppResponse::Synth2Generated { notes });
+        }
+        self.dispatch(command, drums, audio)
+    }
+
+    pub fn set_synth2<A: AudioPort>(&mut self, synth: SynthTrack, audio: &mut A) -> io::Result<()> {
+        self.replace_synth2(synth, CreationMode::User, audio)
+    }
+
+    fn replace_synth2<A: AudioPort>(
+        &mut self, synth: SynthTrack, source: CreationMode, audio: &mut A,
+    ) -> io::Result<()> {
+        synth.validate()?;
+        if synth.preset != SynthPreset::Pad { return Err(invalid("PAD slot requires the Pad instrument")); }
+        let mut proposed = self.session.current().clone();
+        proposed.replace_synth2(synth, source);
+        let bar = self.prepare_project(&proposed)?;
+        audio.queue_bar(bar)?;
+        *self.session.current_mut() = proposed;
+        self.session.save_current();
+        Ok(())
     }
 
     /// The same atomic publish/save logic is shared by manual note editing and
@@ -782,6 +833,35 @@ mod tests {
         assert!(app.set_synth1(SynthTrack::demo(SynthPreset::Pluck), &mut audio).is_err());
         assert!(app.session().last_saved().unwrap().synth1().is_none());
         assert!(app.session().current().synth1().is_none());
+    }
+
+    #[test]
+    fn neural_pad_is_independent_and_failed_publication_preserves_both_snapshots() {
+        let mut app = ApplicationController::new(8_000,120.0).unwrap();
+        let mut audio = TestAudio::default();
+        let pluck = SynthTrack::demo(SynthPreset::Pluck);
+        app.set_synth1(pluck.clone(),&mut audio).unwrap();
+        let mut drums = || -> io::Result<GeneratedPattern> { panic!("must not regenerate drums") };
+        let mut synth = |preset, level, _| {
+            let mut track=SynthTrack::demo(preset); track.level=level; Ok(track)
+        };
+        let response=app.dispatch_neural(Command::GenerateTrack(TrackId::Synth2), &mut drums,&mut synth,&mut audio).unwrap();
+        assert_eq!(response,AppResponse::Synth2Generated {notes:6});
+        let pad=app.session().last_saved().unwrap().synth2().unwrap().content.clone();
+        assert_eq!(app.session().last_saved().unwrap().synth1().unwrap().content,pluck);
+        let mix=audio.queued.last().unwrap().samples.clone();
+        app.dispatch_neural(Command::PlayLast,&mut drums,&mut synth,&mut audio).unwrap();
+        assert_eq!(audio.queued.last().unwrap().samples,mix);
+        audio.reject_queue=true;
+        let mut changed=pad.clone(); changed.notes[0].pitch=72;
+        let mut success=|_,_,_| Ok(changed.clone());
+        assert!(app.dispatch_neural(Command::GenerateTrack(TrackId::Synth2),&mut drums,&mut success,&mut audio).is_err());
+        assert_eq!(app.session().current().synth2().unwrap().content,pad);
+        assert_eq!(app.session().last_saved().unwrap().synth2().unwrap().content,pad);
+        assert_eq!(app.session().last_saved().unwrap().synth1().unwrap().content,pluck);
+        let mut fail=|_,_,_| Err(io::Error::other("model missing"));
+        assert!(app.dispatch_neural(Command::GenerateTrack(TrackId::Synth2),&mut drums,&mut fail,&mut audio).is_err());
+        assert_eq!(app.session().last_saved().unwrap().synth2().unwrap().content,pad);
     }
 
     #[test]

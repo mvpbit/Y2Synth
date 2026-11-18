@@ -117,6 +117,22 @@ pub fn prepare_project_loop(
 
 
 
+/// Mix the independent PAD before the shared master chain.
+pub fn prepare_three_track_loop(
+    drums: Option<(&GeneratedPattern, &DrumKit)>, pluck: Option<&SynthTrack>,
+    pad: Option<&SynthTrack>, bpm: f32, sample_rate: u32,
+) -> io::Result<PreparedLoop> {
+    let Some(pad) = pad else { return prepare_project_loop(drums,pluck,bpm,sample_rate); };
+    if drums.is_none() && pluck.is_none() { return prepare_project_loop(None,Some(pad),bpm,sample_rate); }
+    let mut mixed=prepare_project_loop(drums,pluck,bpm,sample_rate)?;
+    let samples=render_synth1_bar(pad,bpm,sample_rate)?;
+    if samples.len()!=mixed.samples.len() { return Err(invalid("PAD bar length mismatch")); }
+    for (a,b) in mixed.samples.iter_mut().zip(samples) { *a += b*0.64; }
+    let peak=mixed.samples.iter().fold(0.0_f32,|p,&x|p.max(x.abs()));
+    if peak>0.85 { for x in &mut mixed.samples { *x *= 0.85/peak; } }
+    Ok(mixed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

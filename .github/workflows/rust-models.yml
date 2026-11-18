@@ -22,6 +22,15 @@ jobs:
         run: |
           for model in drum_kit_rnn melody_rnn multitrack_chords; do
             bash experiments/drumsrnn/download-model.sh "$model"
-            cat "experiments/drumsrnn/models/${model}_tfjs/config.json"
-            cat "experiments/drumsrnn/models/${model}_tfjs/weights_manifest.json"
           done
+      - name: Install isolated browser oracle
+        run: |
+          npm install --prefix "$RUNNER_TEMP/neural-check" playwright@1.48.2
+          "$RUNNER_TEMP/neural-check/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Generate official Magenta.js reference
+        env:
+          NEURAL_CHECK_TOOLS: ${{ runner.temp }}/neural-check
+          NEURAL_REFERENCE: ${{ runner.temp }}/neural-reference.json
+        run: node experiments/drumsrnn/check-neural-reference.mjs
+      - name: Verify native inference and sampled phrases
+        run: cargo run --release --locked --manifest-path experiments/drumsrnn/rust/Cargo.toml --bin neural-check -- experiments/drumsrnn/models "$RUNNER_TEMP/neural-reference.json"

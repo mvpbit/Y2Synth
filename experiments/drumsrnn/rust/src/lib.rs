@@ -13,6 +13,7 @@ pub mod sequencer;
 pub mod master_fx;
 pub mod synth1;
 pub mod melody;
+pub mod neural;
 pub mod project;
 pub mod application;
 pub mod ui;
@@ -57,7 +58,7 @@ impl Checkpoint {
 struct Config {
     #[serde(rename = "type")]
     model_type: String,
-    #[serde(rename = "attentionLength")]
+    #[serde(rename = "attentionLength", default)]
     attention_length: usize,
 }
 
@@ -97,13 +98,28 @@ fn valid_shard_name(name: &str) -> bool {
         && Path::new(name).file_name().is_some_and(|part| part.to_str() == Some(name))
 }
 
+fn quantization(spec: &WeightSpec) -> io::Result<(usize, Option<(f64, f64)>)> {
+    let Some(q) = &spec.quantization else { return Ok((4, None)); };
+    let width = match q["dtype"].as_str() {
+        Some("uint8") => 1,
+        Some("uint16") => 2,
+        _ => return Err(invalid("Unsupported quantization dtype")),
+    };
+    let min = q["min"].as_f64().ok_or_else(|| invalid("Missing quantization min"))?;
+    let scale = q["scale"].as_f64().ok_or_else(|| invalid("Missing quantization scale"))?;
+    if !min.is_finite() || !scale.is_finite() || scale < 0.0 {
+        return Err(invalid("Invalid quantization range"));
+    }
+    Ok((width, Some((min, scale))))
+}
+
 fn weight_count(spec: &WeightSpec) -> io::Result<usize> {
     if spec.name.is_empty() {
         return Err(invalid("Empty tensor name"));
     }
-    if spec.dtype != "float32" || spec.quantization.is_some() {
+    if spec.dtype != "float32" {
         return Err(invalid(format!(
-            "{}: only unquantized float32 weights are supported (found {})",
+            "{}: only float32 tensor values are supported (found {})",
             spec.name, spec.dtype
         )));
     }
@@ -176,16 +192,23 @@ impl ShardStream {
 
 /// Read the *already downloaded* Magenta.js converted checkpoint in `model_dir`.
 ///
-/// Supports only unquantized float32 tensor groups. Tensor names and shapes are
+/// Supports float32 tensor groups, including uint8/uint16 quantization. Tensor names and shapes are
 /// taken from weights_manifest.json; bytes are stored in the manifest's order.
 /// A group may contain multiple shards and a tensor may span shard boundaries.
 ///
 /// Does not verify an upstream checksum or implement the inference graph.
 pub fn load_checkpoint(model_dir: &Path) -> io::Result<Checkpoint> {
+    load_checkpoint_filtered(model_dir, |_| true)
+}
+
+/// Load selected tensors, streaming past unused encoders without allocating them.
+pub fn load_checkpoint_filtered(
+    model_dir: &Path, include: impl Fn(&str) -> bool,
+) -> io::Result<Checkpoint> {
     let config: Config = read_json(&model_dir.join("config.json"))?;
-    if config.model_type != "MusicRNN" {
+    if config.model_type != "MusicRNN" && config.model_type != "MusicVAE" {
         return Err(invalid(format!(
-            "Expected config.type=MusicRNN, got {:?}",
+            "Expected config.type=MusicRNN or MusicVAE, got {:?}",
             config.model_type
         )));
     }
@@ -231,7 +254,7 @@ pub fn load_checkpoint(model_dir: &Path) -> io::Result<Checkpoint> {
             }
             let count = weight_count(spec)?;
             let bytes = count
-                .checked_mul(4)
+                .checked_mul(quantization(spec)?.0)
                 .and_then(|n| u64::try_from(n).ok())
                 .ok_or_else(|| invalid(format!("{}: byte size overflows", spec.name)))?;
             expected_bytes = expected_bytes.checked_add(bytes).ok_or_else(|| {
@@ -251,7 +274,33 @@ pub fn load_checkpoint(model_dir: &Path) -> io::Result<Checkpoint> {
 
         let mut stream = ShardStream::new(paths);
         for (spec, &count) in group.weights.iter().zip(&counts) {
-            let values = stream.read_f32_vec(count)?;
+            let (width, quant) = quantization(spec)?;
+            if !include(&spec.name) {
+                let mut remaining = count * width;
+                let mut buffer = [0u8; 32768];
+                while remaining > 0 {
+                    let n = remaining.min(buffer.len());
+                    stream.read_exact_across_shards(&mut buffer[..n])?;
+                    remaining -= n;
+                }
+                continue;
+            }
+            let values = if let Some((min, scale)) = quant {
+                let mut values = Vec::with_capacity(count);
+                let mut buffer = [0u8; 8192];
+                while values.len() < count {
+                    let n = (count - values.len()).min(buffer.len() / width);
+                    stream.read_exact_across_shards(&mut buffer[..n * width])?;
+                    for bytes in buffer[..n * width].chunks_exact(width) {
+                        let q = if width == 1 { bytes[0] as u16 }
+                            else { u16::from_le_bytes([bytes[0], bytes[1]]) };
+                        let value = (min + scale * f64::from(q)) as f32;
+                        if !value.is_finite() { return Err(invalid("Non-finite dequantized weight")); }
+                        values.push(value);
+                    }
+                }
+                values
+            } else { stream.read_f32_vec(count)? };
             tensors.insert(
                 spec.name.clone(),
                 Tensor {
@@ -361,6 +410,21 @@ mod tests {
             .replace("\"part1\"", "\"../secrets\"");
         fs::write(folder.0.join("weights_manifest.json"), manifest).unwrap();
         assert!(load_checkpoint(&folder.0).is_err());
+    }
+
+    #[test]
+    fn quantized_vae_streams_across_shards_and_skips_unused_tensors() {
+        let folder = TempDir::new().unwrap();
+        write_fixture(&folder.0, "[3]", &[0], &[2, 255]);
+        fs::write(folder.0.join("config.json"), r#"{"type":"MusicVAE"}"#).unwrap();
+        fs::write(folder.0.join("weights_manifest.json"), r#"[{"paths":["part1","part2"],"weights":[
+            {"name":"encoder","shape":[1],"dtype":"float32","quantization":{"dtype":"uint8","min":-1,"scale":0.5}},
+            {"name":"decoder","shape":[2],"dtype":"float32","quantization":{"dtype":"uint8","min":-1,"scale":0.5}}
+        ]}]"#).unwrap();
+        let model = load_checkpoint_filtered(&folder.0, |n| n == "decoder").unwrap();
+        assert_eq!(model.attention_length, 0);
+        assert_eq!(model.tensors.len(), 1);
+        assert_eq!(model.tensors["decoder"].values, [0.0, 126.5]);
     }
 
     #[test]

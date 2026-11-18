@@ -42,12 +42,12 @@ pub struct GeneratedPattern {
 /// SplitMix64: a small, reproducible generator for multinomial *sampling*.
 /// No cryptographic properties are required; this is not used to train the network.
 #[derive(Debug, Clone)]
-struct SamplingRng {
+pub(crate) struct SamplingRng {
     state: u64,
 }
 
 impl SamplingRng {
-    fn new(seed: u64) -> Self {
+    pub(crate) fn new(seed: u64) -> Self {
         Self { state: seed }
     }
     fn next_u64(&mut self) -> u64 {
@@ -57,7 +57,7 @@ impl SamplingRng {
         value = (value ^ (value >> 27)).wrapping_mul(0x94d049bb133111eb);
         value ^ (value >> 31)
     }
-    fn unit_f64(&mut self) -> f64 {
+    pub(crate) fn unit_f64(&mut self) -> f64 {
         // 53 random bits: 0.0 <= value < 1.0
         ((self.next_u64() >> 11) as f64) / 9_007_199_254_740_992.0
     }

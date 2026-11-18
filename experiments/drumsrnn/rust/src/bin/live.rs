@@ -25,7 +25,8 @@ use y2synth_drumsrnn_weights::{
     kit::{pitch_by_name, DrumKit, VOICE_NAMES},
     load_checkpoint,
     master_fx::MasterEffects,
-    melody::{compose, RhythmContext},
+    melody::RhythmContext,
+    neural::NeuralSynths,
     project::TrackId,
     realtime::RealtimePlayer,
     sequencer::PreparedLoop,
@@ -53,8 +54,8 @@ fn usage() {
     println!("  play | stop | bpm <40..240> | regenerate | status | quit");
     println!("  kit | level <voice> <0..1.5> | tone <voice> <0..1>");
     println!("  decay <voice> <0.5..2> | reset-kit");
-    println!("  synth1 pluck | synth1 pad | synth1 generate | synth1 show | synth1 clear");
-    println!("  synth1 level <0..1> | synth1 note <step 0..15> <MIDI 36..96> <length 1..16>");
+    println!("  pluck generate|demo|show|clear | pad generate|demo|show|clear");
+    println!("  pluck|pad level <0..1> | pluck|pad note <step 0..15> <MIDI 36..96> <length 1..16>");
     println!("  fx | fx on | fx off | fx reset");
     println!("  fx delay on|off | fx delay steps 2 | fx delay feedback 0.4 | fx delay wet 0.25");
     println!("  fx reverb on|off | fx reverb size 0.6 | fx reverb damping 0.45 | fx reverb wet 0.2");
@@ -193,7 +194,7 @@ fn apply_command<G: DrumGenerator, S: Synth1Generator>(
     playing: &Arc<AtomicBool>,
 ) -> io::Result<AppResponse> {
     let mut audio = LiveAudio { input, playing };
-    app.dispatch_with_synth(command, drum_generator, synth_generator, &mut audio)
+    app.dispatch_neural(command, drum_generator, synth_generator, &mut audio)
 }
 
 fn describe_result(result: AppResponse) {
@@ -205,16 +206,18 @@ fn describe_result(result: AppResponse) {
             println!("AI: {hits} drum hits; new loop queued and saved in RAM.");
         }
         AppResponse::Synth1Generated { notes, preset } => {
-            println!("AI composer: {notes} notes for Synth 1 / {} (procedural, not ML).",
+            println!("AI: {notes} notes for {} / melody_rnn.",
                 preset.name());
             println!("New musical phrase queued for next bar and saved in RAM.");
         }
+        AppResponse::Synth2Generated { notes } => println!("AI: {notes} PAD notes / multitrack_chords; queued and saved in RAM."),
+        AppResponse::EditSynth2 => println!("PAD editor: pad demo | pad show | pad clear | pad level 0.7 | pad note 0 60 8"),
         AppResponse::EditDrums => {
             println!("Drums editor: kit | level kick 0.5 | tone snare 0.8 | decay chh 1.5");
         }
         AppResponse::EditSynth1 => {
-            println!("Synth 1 USER editor: synth1 pluck | synth1 pad | synth1 show");
-            println!("  synth1 level 0.7 | synth1 note 0 60 2 | synth1 clear");
+            println!("PLUCK editor: pluck demo | pluck show");
+            println!("  pluck level 0.7 | pluck note 0 60 2 | pluck clear");
         }
         AppResponse::NotImplemented(feature) => println!("Not available yet: {feature}"),
         AppResponse::NothingSaved => println!("No saved music project to play."),
@@ -269,7 +272,7 @@ fn edit_master_fx(args: &[&str], current: MasterEffects) -> Result<MasterEffects
 }
 
 fn show_master_fx(settings: MasterEffects) {
-    println!("Master FX chain: (Drums + Synth 1) -> DELAY -> REVERB -> output");
+    println!("Master FX chain: (Drums + PLUCK + PAD) -> DELAY -> REVERB -> output");
     println!("  Delay:  {} | steps {} (16th notes) | feedback {:.2} | wet {:.2}",
         if settings.delay.enabled { "ON " } else { "OFF" },
         settings.delay.steps, settings.delay.feedback, settings.delay.wet);
@@ -278,19 +281,17 @@ fn show_master_fx(settings: MasterEffects) {
         settings.reverb.size, settings.reverb.damping, settings.reverb.wet);
 }
 
-fn show_synth1(app: &ApplicationController) {
-    if let Some(track) = app.session().current().synth1() {
-        let synth = &track.content;
-        println!("Synth 1: {} | level {:.2} | {} notes | source {:?}",
-            synth.preset.name(), synth.level, synth.notes.len(), track.source);
-        for note in &synth.notes {
-            println!("  step {:>2}: MIDI {:>3}, length {:>2}, velocity {:.2}",
-                note.step, note.pitch, note.length_steps, note.velocity);
-        }
-    } else {
-        println!("Synth 1 is empty. Use 'synth1 pluck' or 'synth1 pad'.");
-    }
+fn track_name(id: TrackId) -> &'static str {
+    match id { TrackId::Synth1 => "PLUCK", TrackId::Synth2 => "PAD", TrackId::Drums => "DRUMS" }
 }
+fn show_synth(app: &ApplicationController, id: TrackId) {
+    let track = if id == TrackId::Synth2 { app.session().current().synth2() } else { app.session().current().synth1() };
+    if let Some(track) = track {
+        println!("{}: level {:.2}, {} notes, source {:?}",track_name(id),track.content.level,track.content.notes.len(),track.source);
+        for n in &track.content.notes { println!("  step {}: MIDI {}, length {}, velocity {:.2}",n.step,n.pitch,n.length_steps,n.velocity); }
+    } else { println!("{} is empty; use generate or demo.",track_name(id)); }
+}
+fn show_synth1(app: &ApplicationController) { show_synth(app,TrackId::Synth1); }
 
 fn show_menu(menu: &MenuController) {
     match menu.screen() {
@@ -300,15 +301,15 @@ fn show_menu(menu: &MenuController) {
             menu.mode_focus(),
         ),
         Screen::UserPage(track) => println!(
-            "MENU: USER / {track:?} (next/prev track, center to edit, back)"
+            "MENU: USER / {} (next/prev track, center to edit, back)", track_name(track)
         ),
         Screen::AiMenu => println!(
             "MENU: AI / {:?} (next/prev, center to select, back)",
             menu.ai_focus(),
         ),
         Screen::AiTrackSelect => println!(
-            "MENU: AI / GENERATE TRACK / {:?} (next/prev, center to generate, back)",
-            menu.track_focus(),
+            "MENU: AI / GENERATE TRACK / {} (next/prev, center to generate, back)",
+            track_name(menu.track_focus()),
         ),
     }
 }
@@ -372,22 +373,17 @@ fn run() -> Result<(), Box<dyn Error>> {
         seed.set(next_seed);
         Ok(pattern)
     };
-    // Separate seed sequence for composed melodic phrases; does not alter the
-    // seed progression or checkpoint state of the existing DrumsRNN generator.
-    let melody_seed = Cell::new(options.seed ^ 0xa57d_3e12_5b42_c908);
-    let mut synth_generator = |preset: SynthPreset, level: f32, rhythm: RhythmContext|
-        -> io::Result<SynthTrack> {
-        let next_seed = melody_seed.get().wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let phrase = compose(next_seed, preset, level, rhythm)?;
-        melody_seed.set(next_seed);
-        Ok(phrase)
+    let models_root = options.weights.parent().unwrap_or(Path::new("."));
+    let mut neural = NeuralSynths::new(models_root, options.seed ^ 0xa57d_3e12_5b42_c908);
+    let mut synth_generator = |preset: SynthPreset, level: f32, _: RhythmContext| {
+        neural.generate(preset, level)
     };
     let mut menu = MenuController::default();
 
     println!();
-    println!("Ready: play | stop | regenerate | synth1 generate | synth1 pluck | synth1 pad | fx | menu | help | quit");
+    println!("Ready: play | stop | regenerate | pluck generate | pad generate | fx | menu | help | quit");
     println!("Wheel simulation: center | next | prev | back | wheel-play");
-    println!("DrumsRNN: neural AI; Synth 1: autonomous rule-based melodic composer.");
+    println!("Models: drums=drum_kit_rnn, pluck=melody_rnn, pad=multitrack_chords.");
     println!("New loops and edits are saved in RAM, not to disk.");
     let stdin = io::stdin();
     let mut lines = stdin.lock();
@@ -455,83 +451,40 @@ fn run() -> Result<(), Box<dyn Error>> {
                     Err(error) => println!("Invalid master FX setting: {error}"),
                 }
             }
-            ["synth1", "pluck"] | ["synth1", "pad"] => {
-                let preset = if words[1] == "pluck" {
-                    SynthPreset::Pluck
-                } else {
-                    SynthPreset::Pad
-                };
-                let synth = SynthTrack::demo(preset);
-                let mut audio = LiveAudio { input: &mut input, playing: &playing };
-                app.set_synth1(synth, &mut audio)?;
-                println!("Synth 1: {} melodic phrase queued for next bar; saved in RAM.",
-                    preset.name());
-                show_synth1(&app);
-            }
-            ["synth1", "generate"] => {
-                let result = apply_command(
-                    &mut app, MenuCommand::GenerateTrack(TrackId::Synth1),
-                    &mut drum_generator, &mut synth_generator, &mut input, &playing,
-                )?;
-                describe_result(result);
-                show_synth1(&app);
-            }
-            ["synth1", "show"] => show_synth1(&app),
-            ["synth1", "clear"] => {
-                if let Some(existing) = app.session().current().synth1() {
-                    let mut empty = existing.content.clone();
-                    empty.notes.clear();
-                    let mut audio = LiveAudio { input: &mut input, playing: &playing };
-                    app.set_synth1(empty, &mut audio)?;
-                    println!("Synth 1 notes cleared; drums remain unchanged.");
-                } else {
-                    println!("Synth 1 is already empty.");
-                }
-            }
-            ["synth1", "level", raw] => {
-                if let (Some(existing), Ok(level)) = (
-                    app.session().current().synth1(), raw.parse::<f32>(),
-                ) {
-                    let mut edited = existing.content.clone();
-                    edited.level = level;
-                    if let Err(err) = edited.validate() {
-                        println!("Invalid Synth 1 level: {err}");
-                    } else {
-                        let mut audio = LiveAudio { input: &mut input, playing: &playing };
-                        app.set_synth1(edited, &mut audio)?;
-                        println!("Synth 1 level {level:.2} queued and saved in RAM.");
+            [instrument, operation, args @ ..] if ["pluck","pad","synth1"].contains(instrument) => {
+                let id = if *instrument == "pad" || (*instrument == "synth1" && *operation == "pad") { TrackId::Synth2 } else { TrackId::Synth1 };
+                let preset = if id == TrackId::Synth2 { SynthPreset::Pad } else { SynthPreset::Pluck };
+                if *operation == "generate" && args.is_empty() {
+                    println!("Generating {} (first use loads the checkpoint)…",track_name(id));
+                    match apply_command(&mut app,MenuCommand::GenerateTrack(id),&mut drum_generator,&mut synth_generator,&mut input,&playing) {
+                        Ok(result) => { describe_result(result); show_synth(&app,id); }
+                        Err(e) => eprintln!("Generation failed; previous music retained: {e}"),
                     }
+                } else if *operation == "show" && args.is_empty() {
+                    show_synth(&app,id);
                 } else {
-                    println!("Choose 'synth1 pluck'/'synth1 pad' first, then level 0..1.");
-                }
-            }
-            ["synth1", "note", step, pitch, length] => {
-                match (
-                    step.parse::<usize>(),
-                    pitch.parse::<u8>(),
-                    length.parse::<usize>(),
-                ) {
-                    (Ok(step), Ok(pitch), Ok(length_steps)) => {
-                        let note = NoteEvent {
-                            step, pitch, length_steps, velocity: 0.75,
-                        };
-                        if let Err(error) = note.validate() {
-                            println!("Invalid note: {error}");
-                        } else if let Some(existing) = app.session().current().synth1() {
-                            let mut synth = existing.content.clone();
-                            synth.notes.push(note);
-                            if let Err(error) = synth.validate() {
-                                println!("Cannot add note: {error}");
-                            } else {
-                                let mut audio = LiveAudio { input: &mut input, playing: &playing };
-                                app.set_synth1(synth, &mut audio)?;
-                                println!("Synth 1 note added; new mixed bar queued.");
+                    let existing = if id==TrackId::Synth2 { app.session().current().synth2() } else { app.session().current().synth1() };
+                    let mut track=existing.map(|t| t.content.clone()).unwrap_or(SynthTrack {preset,notes:vec![],level:0.75});
+                    let edited: Result<(),String> = match (*operation,args) {
+                        ("demo" | "pluck" | "pad",[]) => { track=SynthTrack::demo(preset); Ok(()) }
+                        ("clear",[]) => { track.notes.clear(); Ok(()) }
+                        ("level",[v]) => v.parse::<f32>().map(|v|track.level=v).map_err(|_|"Expected level 0..1".into()),
+                        ("note",[step,pitch,length]) => {
+                            match (step.parse::<usize>(),pitch.parse::<u8>(),length.parse::<usize>()) {
+                                (Ok(step),Ok(pitch),Ok(length_steps)) => {track.notes.push(NoteEvent {step,pitch,length_steps,velocity:0.75}); Ok(())}
+                                _ => Err("Expected note <step> <pitch> <length>".into()),
                             }
-                        } else {
-                            println!("Choose 'synth1 pluck' or 'synth1 pad' first.");
+                        }
+                        _ => Err("Use generate|demo|show|clear|level|note".into()),
+                    };
+                    match edited.and_then(|_|track.validate().map_err(|e|e.to_string())) {
+                        Err(e) => eprintln!("Invalid edit: {e}"),
+                        Ok(()) => {
+                            let mut audio=LiveAudio {input:&mut input,playing:&playing};
+                            let result=if id==TrackId::Synth2 {app.set_synth2(track,&mut audio)} else {app.set_synth1(track,&mut audio)};
+                            match result { Ok(()) => show_synth(&app,id),Err(e) => eprintln!("Edit failed: {e}") }
                         }
                     }
-                    _ => println!("Syntax: synth1 note <step 0..15> <MIDI 36..96> <length 1..16>"),
                 }
             }
             ["reset-kit"] => {
@@ -570,9 +523,12 @@ fn run() -> Result<(), Box<dyn Error>> {
                     _ => InputEvent::PlayPressed,
                 };
                 if let Some(command) = menu.handle(event) {
-                    let result = apply_command(
+                    let result = match apply_command(
                         &mut app, command, &mut drum_generator, &mut synth_generator, &mut input, &playing,
-                    )?;
+                    ) {
+                        Ok(result) => result,
+                        Err(e) => { eprintln!("Command failed; previous music retained: {e}"); show_menu(&menu); continue; }
+                    };
                     describe_result(result);
                     if let AppResponse::Synth1Generated { .. } = result {
                         show_synth1(&app);
@@ -594,6 +550,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                     hits, current.bpm(), current.mode(), options.temperature, seed.get(),
                 );
                 show_synth1(&app);
+                show_synth(&app,TrackId::Synth2);
                 show_master_fx(current.master_fx());
                 show_menu(&menu);
             }
