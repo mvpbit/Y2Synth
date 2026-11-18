@@ -99,104 +99,42 @@ const document = {
   addEventListener() {},
   querySelectorAll() { return []; },
 };
-runInNewContext(script[1] + String.raw`
-if (!state.pluck || !state.pad) throw new Error("Missing named instruments");
-if (state.pluck.notes.some(note => note.len === 8)) throw new Error("Wrong Pluck demo");
-if (!state.pad.notes.every(note => note.len === 8)) throw new Error("Wrong Pad demo");
-if (!choices.user().some(option => option.label === "PLUCK")) throw new Error("Pluck menu missing");
-if (!choices.user().some(option => option.label === "PAD")) throw new Error("Pad menu missing");
-const beforePluck = JSON.stringify(state.pluck.notes);
-generateInstrument("pad");
-if (JSON.stringify(state.pluck.notes) !== beforePluck) throw new Error("Pad generator changed Pluck");
+await runInNewContext("(async()=>{\n" + script[1] + String.raw`
+const assertRuntime=(ok,message)=>{if(!ok)throw Error(message);};
+const pluckBefore=JSON.stringify(state.pluck.notes),drumsBefore=JSON.stringify(state.drums);
+const samplePad=[{step:0,pitch:60,len:16,velocity:.7},{step:0,pitch:63,len:16,velocity:.7},{step:0,pitch:67,len:16,velocity:.7}];
+let pending=generateInstrument("pad");
+assertRuntime(state.generating,"Loading must lock generation");
+assertRuntime(await generateInstrument("pluck")===false,"Concurrent generation must be rejected");
+neuralWorker.onmessage({data:{id:neuralJob.id,pattern:samplePad,model:"multitrack_chords",chord:"Cm"}});
+assertRuntime(await pending,"PAD result not committed");
+assertRuntime(JSON.stringify(state.pluck.notes)===pluckBefore,"PAD changed PLUCK");
+assertRuntime(JSON.stringify(state.drums)===drumsBefore,"PAD changed drums");
+const padBefore=JSON.stringify(state.pad.notes);
+pending=generateInstrument("pluck");
+neuralWorker.onmessage({data:{id:neuralJob.id,error:"Network unavailable"}});
+assertRuntime(await pending===false,"Error must fail generation");
+assertRuntime(JSON.stringify(state.pluck.notes)===pluckBefore,"Error replaced old music");
+pending=generateInstrument("pluck");
+neuralWorker.onmessage({data:{id:neuralJob.id,pattern:[{step:17,pitch:60,len:1,velocity:.7}]}});
+assertRuntime(await pending===false,"Invalid notes accepted");
+pending=generateInstrument("pad");
 restoreDemo("pad");
-if (state.pad.notes.length !== 6 || !state.pad.notes.every(note => note.len === 8)) {
-  throw new Error("Pad demo restore did not restore chords");
-}
-const beforePad = JSON.stringify(state.pad.notes);
-generateInstrument("pluck");
-if (JSON.stringify(state.pad.notes) !== beforePad) throw new Error("Pluck generator changed Pad");
-restoreDemo("pluck");
-if (state.pluck.notes.length !== 6 || state.pluck.notes.some(note => note.len === 8)) {
-  throw new Error("Pluck demo restore did not restore melody");
-}
-// Reproducible diversity + musical bounds: hundreds of patterns, not just
-// different random transpositions of one fixed rhythm.
-const generationReport=[];
-const originalRandom=Math.random;
-for(const seed of [1,42,20261118,0xffffffff]){
-  let randomState=seed;
-  Math.random=()=>{randomState=(Math.imul(randomState,1664525)+1013904223)>>>0;return randomState/4294967296;};
-  const pluckRhythms=new Set(),pluckCounts=new Set(),contours=new Set();
-  const padRhythms=new Set(),padCounts=new Set(),voicings=new Set(),snares=new Set();
-  const fxBefore=JSON.stringify(state.fx),tempoBefore=state.bpm;
-  const drumSignatures=new Set(),lengths=new Set(),velocities=new Set();
-  for(let iteration=0;iteration<128;iteration++){
-    for(const track of ["pad","pluck","drums"]){
-      const others=JSON.stringify(["pluck","pad","drums"].filter(key=>key!==track).map(key=>state[key]));
-      if(track==="drums")generateDrums();else generateInstrument(track);
-      if(JSON.stringify(["pluck","pad","drums"].filter(key=>key!==track).map(key=>state[key]))!==others){
-        throw new Error("Generation changed another track: "+track);
-      }
-    }
-    for(const track of ["pluck","pad"]){
-      const notes=state[track].notes;
-      if(!notes.length)throw new Error("Empty generated instrument");
-      const unique=new Set();
-      let previousStep=-1;
-      for(const note of notes){
-        if(!Number.isInteger(note.step)||note.step<0||note.step>15||
-           !Number.isInteger(note.len)||note.len<1||note.step+note.len>16||
-           !Number.isInteger(note.pitch)||note.pitch<48||note.pitch>84||
-           ![0,2,3,5,7,8,10].includes(note.pitch%12)||
-           !Number.isFinite(note.velocity)||note.velocity<.4||note.velocity>1){
-          throw new Error("Invalid generated note: "+JSON.stringify(note));
-        }
-        if(note.step<previousStep)throw new Error("Unsorted generated notes");
-        previousStep=note.step;
-        const id=note.step+":"+note.pitch;
-        if(unique.has(id))throw new Error("Duplicate generated note");
-        unique.add(id);
-        lengths.add(note.len);velocities.add(note.velocity.toFixed(2));
-      }
-      const starts=[...new Set(notes.map(note=>note.step))];
-      if(track==="pluck"){
-        if(starts.length!==notes.length||notes.length<4||notes.length>12)throw new Error("Pluck density");
-        notes.forEach((note,i)=>{
-          if(i+1<notes.length&&note.step+note.len>notes[i+1].step)throw new Error("Pluck gate overlap");
-        });
-        pluckRhythms.add(starts.join(","));pluckCounts.add(notes.length);
-        contours.add(notes.map(note=>note.pitch-notes[0].pitch).join(","));
-      }else{
-        if(starts.length<1||starts.length>4||starts[0]!==0)throw new Error("Pad chord count");
-        for(const step of starts){
-          const chord=notes.filter(note=>note.step===step);
-          if(chord.length<3||chord.length>4||new Set(chord.map(note=>note.len)).size!==1)throw new Error("Malformed chord");
-        }
-        padRhythms.add(starts.join(","));padCounts.add(starts.length);
-        voicings.add(notes.map(note=>note.pitch-notes[0].pitch).join(","));
-      }
-    }
-    for(const hits of Object.values(state.drums)){
-      if(!hits.length||new Set(hits).size!==hits.length||hits.some((step,i)=>!Number.isInteger(step)||step<0||step>15||(i&&step<=hits[i-1]))){
-        throw new Error("Invalid drum pattern");
-      }
-    }
-    drumSignatures.add(JSON.stringify(state.drums));
-    snares.add(state.drums.snare.join(","));
-  }
-  if(pluckRhythms.size<80||pluckCounts.size<7||contours.size<80||
-     padRhythms.size<20||padCounts.size!==4||voicings.size<60||
-     snares.size<20||drumSignatures.size<100||lengths.size<6||velocities.size<20){
-    throw new Error("Generator diversity regressed for seed "+seed);
-  }
-  if(JSON.stringify(state.fx)!==fxBefore||state.bpm!==tempoBefore)throw new Error("Generation changed FX or tempo");
-  generationReport.push({seed,pluckRhythms:pluckRhythms.size,padRhythms:padRhythms.size,
-    contours:contours.size,voicings:voicings.size,snarePatterns:snares.size,drumPatterns:drumSignatures.size});
-}
-// Rejection sampling must be bounded even when random values never change.
-Math.random=()=>0;
-for(let i=0;i<10;i++){generateInstrument("pad");generateInstrument("pluck");generateDrums();}
-Math.random=originalRandom;
+const demoPad=JSON.stringify(state.pad.notes);
+neuralWorker.onmessage({data:{id:neuralJob.id,pattern:samplePad,model:"multitrack_chords"}});
+assertRuntime(await pending===false&&JSON.stringify(state.pad.notes)===demoPad,"Stale AI overwrote USER demo");
+state.playing=true;
+pending=generateInstrument("pad");
+neuralWorker.onmessage({data:{id:neuralJob.id,pattern:samplePad,model:"multitrack_chords"}});
+assertRuntime(await pending,"Queued generation failed");
+assertRuntime(JSON.stringify(state.pad.notes)===demoPad,"Pattern changed before bar boundary");
+applyPendingPatterns();
+assertRuntime(JSON.stringify(state.pad.notes)===JSON.stringify(samplePad),"Queued pattern lost");
+state.playing=false;
+pending=generateDrums();
+neuralWorker.onerror();
+assertRuntime(await pending===false&&!state.generating&&neuralWorker===null,"Worker crash did not recover");
+assertRuntime(JSON.stringify(state.drums)===drumsBefore,"Worker failure changed drums");
 restoreDemo("pluck");restoreDemo("pad");
 // Exercise real note scheduling with silent test doubles. Short Pad gates at
 // high BPM must not put the sustain event before the end of the attack.
@@ -277,5 +215,30 @@ stopTransport();
 if (state.playing || state.paused || state.playhead !== 0 || audio.step !== 0) {
   throw new Error("Long-press STOP must reset playhead and transport");
 }
-`, { document, window: {}, setTimeout() {}, clearInterval() {} });
-console.log("OK: Y2 480×360, native click-wheel buttons/rotations, BPM edit mode, transport, independent Pluck/Pad, seeded pattern diversity and audio envelopes.");
+`+"\n})()", { document, window: {}, Worker: class { postMessage() {} terminate() {} }, setTimeout() {}, clearTimeout() {}, clearInterval() {} });
+
+// Real adapters are tested with polyphonic output at the model's 24 steps/beat.
+const sandbox={};
+runInNewContext(readFileSync(new URL("./neural-common.js",import.meta.url),"utf8"),sandbox);
+const {instrumentNotes,drumNotes,polyphony}=sandbox.NeuralPatterns;
+const sequence={quantizationInfo:{stepsPerQuarter:24},notes:[
+ {pitch:60,quantizedStartStep:0,quantizedEndStep:48,instrument:0,velocity:100},
+ {pitch:64,quantizedStartStep:0,quantizedEndStep:48,instrument:0,velocity:90},
+ {pitch:67,quantizedStartStep:0,quantizedEndStep:48,instrument:0,velocity:80},
+ {pitch:72,quantizedStartStep:48,quantizedEndStep:96,instrument:0,velocity:100},
+ {pitch:75,quantizedStartStep:48,quantizedEndStep:96,instrument:0,velocity:90},
+ {pitch:36,quantizedStartStep:0,quantizedEndStep:1,instrument:1,isDrum:true}
+]};
+const pad=instrumentNotes(sequence,"pad");
+assert.ok(polyphony(pad).maximum>=3);
+assert.ok(pad.some(note=>note.step===8&&note.len===8),"PAD timing must convert 96 model steps to 16 sequencer steps");
+assert.ok(pad.every(note=>[0,2,3,5,7,8,10].includes(note.pitch%12)));
+assert.throws(()=>instrumentNotes({quantizationInfo:{stepsPerQuarter:4},notes:[]},"pluck"),/silence/);
+assert.throws(()=>instrumentNotes({quantizationInfo:{stepsPerQuarter:4},notes:[
+ {pitch:60,quantizedStartStep:0,quantizedEndStep:8}
+]},"pad"),/polyphonic/);
+assert.deepEqual(JSON.parse(JSON.stringify(drumNotes({quantizationInfo:{stepsPerQuarter:4},notes:[
+ {pitch:36,quantizedStartStep:0},{pitch:38,quantizedStartStep:4},{pitch:42,quantizedStartStep:8}
+]}))),{kick:[0],snare:[4],hat:[8]});
+new Script(readFileSync(new URL("./neural-worker.js",import.meta.url),"utf8"));
+console.log("OK: display, wheel, transport, neural failure/queue isolation and model note adapters.");

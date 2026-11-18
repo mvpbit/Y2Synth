@@ -33,7 +33,7 @@ jobs:
       - name: Assemble static Pages site
         run: |
           mkdir -p _site
-          cp experiments/ui-prototype/index.html _site/index.html
+          cp experiments/ui-prototype/index.html experiments/ui-prototype/neural-common.js experiments/ui-prototype/neural-worker.js _site/
           touch _site/.nojekyll
 
       - name: Configure GitHub Pages

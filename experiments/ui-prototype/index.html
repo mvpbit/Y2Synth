@@ -101,7 +101,7 @@
 </div>
 <div class="hint">Drag around the ring with a mouse or finger · <kbd>Space</kbd> Play/Pause · <kbd>Enter</kbd> OK · <kbd>↑ ↓</kbd> rotate · <kbd>← →</kbd> Prev/Next · <kbd>Esc</kbd> back · <kbd>H</kbd> home</div>
 <div class="tag">480×360 is the exact UI grid in CSS pixels. Physical size on your monitor depends on DPI and browser zoom.</div>
-<div class="tag">Web Audio simulation; Rust / DrumsRNN is not running. Page settings are not stored on a server.</div>
+<div class="tag">Web Audio sound · Magenta neural generation · First use downloads models · Settings stay in memory.</div>
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
@@ -244,6 +244,7 @@ function playInstrumentNote(note,time,instrument){
   }
 }
 function scheduleStep(index,time){
+  if(index===0)applyPendingPatterns();
   for(const key of ["kick","snare","hat"]){
     if(state.drums[key].includes(index))hitDrum(key,time);
   }
@@ -272,7 +273,7 @@ function scheduler(){
 async function transport(){
   if(state.playing){
     state.playing=false;
-    state.paused=true;
+    state.paused=true;applyPendingPatterns();
     clearInterval(audio.timer);audio.timer=null;
     inform("PAUSE · press ▶Ⅱ to resume");
   }else{
@@ -288,140 +289,93 @@ async function transport(){
 }
 function stopTransport(){
   clearInterval(audio.timer);audio.timer=null;
-  state.playing=false;state.paused=false;state.playhead=0;
+  state.playing=false;state.paused=false;state.playhead=0;applyPendingPatterns();
   audio.step=0;
   inform("STOP · bar reset");
   render();
 }
-// Procedural browser composer, not a trained model. Keep both independent
-// tracks in C natural minor, including the original demo phrases.
-const MINOR_SCALE=[0,2,3,5,7,8,10];
-const recentPatterns={pluck:[],pad:[],drums:[]};
-const choose=(items)=>items[Math.floor(Math.random()*items.length)];
-function weighted(items,weight){
-  let target=Math.random()*items.reduce((sum,item)=>sum+weight(item),0);
-  for(const item of items){target-=weight(item);if(target<0)return item;}
-  return items[items.length-1];
+// Generation is asynchronous and isolated in a worker. Never replace an old
+// phrase on download/inference/validation errors, or after a newer USER edit.
+let neuralWorker=null,neuralJob=null,neuralId=0;
+const trackRevision={pluck:0,pad:0,drums:0};
+const pendingPatterns={};
+function resetNeuralWorker(){
+  if(neuralWorker)neuralWorker.terminate();
+  neuralWorker=null;
 }
-function sampleSteps(count,candidates,weight){
-  const pool=[...candidates],result=[];
-  while(result.length<count && pool.length){
-    const step=weighted(pool,weight);
-    result.push(step);pool.splice(pool.indexOf(step),1);
-  }
-  return result.sort((a,b)=>a-b);
-}
-function minorPitch(degree,base=48){
-  return base+12*Math.floor(degree/7)+MINOR_SCALE[((degree%7)+7)%7];
-}
-function freshPattern(track,build,signature){
-  let pattern,key;
-  // Bounded retries: no unbounded work, even with a pathological RNG.
-  for(let attempt=0;attempt<12;attempt++){
-    pattern=build();key=signature(pattern);
-    if(!recentPatterns[track].includes(key))break;
-  }
-  recentPatterns[track].push(key);
-  if(recentPatterns[track].length>8)recentPatterns[track].shift();
-  return pattern;
-}
-function composeDrums(){
-  const style=choose(["straight","broken","half-time","sparse"]);
-  const busy=.2+Math.random()*.65;
-  const kick=sampleSteps(style==="straight"?4:choose([2,3,4,5,6]),
-    Array.from({length:16},(_,i)=>i),
-    step=>step===0?12:style==="straight"&&step%4===0?8:step%2===0?2:busy);
-  const snare=style==="half-time"?[8]:style==="sparse"?[choose([4,8,12])]:[4,12];
-  for(let step=0;step<16;step++){
-    // Displaced backbeats and occasional fills, not a fixed [4,12] forever.
-    if(!snare.includes(step)&&Math.random()<(step>=12?busy*.22:busy*.06))snare.push(step);
-  }
-  if(style==="broken"&&Math.random()<.6){
-    const at=snare.indexOf(12);
-    if(at>=0)snare[at]=choose([11,13,14]);
-  }
-  const hat=sampleSteps(choose([4,6,8,10,12,14]),
-    Array.from({length:16},(_,i)=>i),
-    step=>step%2===0?3:busy*2);
-  return {kick,snare:[...new Set(snare)].sort((a,b)=>a-b),hat};
-}
-function generateDrums(){
-  state.drums=freshPattern("drums",composeDrums,pattern=>JSON.stringify(pattern));
-  inform("New rhythm · "+state.drums.kick.length+" kicks · "+state.drums.hat.length+" hats");
-}
-function composePad(){
-  const count=choose([1,2,2,3,3,4]);
-  const starts=[0,...sampleSteps(count-1,[2,4,6,8,10,12,14],
-    step=>step%4===0?3:1)];
-  const notes=[];
-  let lastDegree=-1,previousCenter=60;
-  starts.forEach((step,index)=>{
-    // Diatonic triads, sevenths, add9 and suspended voicings.
-    const degree=choose([0,2,3,4,5,6].filter(value=>value!==lastDegree));
-    lastDegree=degree;
-    const shape=choose([[0,2,4],[0,2,4,6],[0,2,4,8],[0,3,4]]);
-    const inversion=choose([0,1,2]);
-    const pitches=shape.map((offset,i)=>minorPitch(degree+offset)+(i<inversion?12:0))
-      .sort((a,b)=>a-b);
-    // Choose a register near the previous chord, then sometimes open a voice.
-    const center=pitches.reduce((sum,pitch)=>sum+pitch,0)/pitches.length;
-    if(center-previousCenter>7 && pitches[0]>=60)pitches.forEach((_,i)=>pitches[i]-=12);
-    if(Math.random()<.35 && pitches[pitches.length-1]<=72)pitches[pitches.length-1]+=12;
-    previousCenter=pitches.reduce((sum,pitch)=>sum+pitch,0)/pitches.length;
-    const span=(starts[index+1]??16)-step;
-    const len=Math.max(2,span-(span>2&&Math.random()<.3?1:0));
-    const velocity=.65+Math.random()*.3;
-    pitches.forEach(pitch=>notes.push({step,pitch,len,velocity}));
-  });
-  return notes;
-}
-function padPitchClasses(step){
-  const active=state.pad.notes.filter(note=>note.step<=step && step<note.step+note.len);
-  return new Set(active.map(note=>note.pitch%12));
-}
-function composePluck(){
-  const count=choose([4,5,6,7,8,9,10,11,12]);
-  const syncopation=choose([.3,.8,1.8,3]);
-  const phase=choose([0,1,2,3]);
-  const slots=sampleSteps(count,Array.from({length:16},(_,i)=>i),
-    step=>step%4===phase?3:step%2?syncopation:1.5);
-  const register=choose([55,60,65]);
-  const palette=Array.from({length:30},(_,i)=>i+55)
-    .filter(pitch=>MINOR_SCALE.includes(pitch%12));
-  const motion=choose(["rise","fall","arch","walk","arp"]);
-  const motif=Array.from({length:choose([3,4,5])},()=>choose([-2,-1,0,1,2,3]));
-  let previous=register+choose([0,3,7]);
-  return slots.map((step,index)=>{
-    const chords=padPitchClasses(step);
-    const anchor=index===0 || step%4===0 || index===slots.length-1;
-    const candidates=anchor&&chords.size?palette.filter(pitch=>chords.has(pitch%12)):palette;
-    let target=previous;
-    if(motion==="rise")target=register+index;
-    else if(motion==="fall")target=register+12-index;
-    else if(motion==="arch")target=register+12*Math.sin(Math.PI*index/(count-1));
-    else if(motion==="arp")target=register+[0,7,12,3][index%4];
-    else target=previous+motif[index%motif.length]*2;
-    const pitch=weighted(candidates,pitch=>{
-      const distance=Math.abs(pitch-target);
-      const repeat=pitch===previous?.3:1;
-      return repeat/(1+distance*distance*.35);
-    });
-    previous=pitch;
-    const room=(slots[index+1]??16)-step;
-    const len=Math.min(room,choose([1,1,2,2,3,4]));
-    const velocity=Math.min(1,(step%4===0?.85:.58)+Math.random()*.18);
-    return {step,pitch,len,velocity};
+function requestNeuralPattern(track){
+  return new Promise((resolve,reject)=>{
+    try{
+      if(!neuralWorker){
+        neuralWorker=new Worker("neural-worker.js");
+        neuralWorker.onmessage=({data})=>{
+          if(!neuralJob||data.id!==neuralJob.id)return;
+          if(data.status){inform(data.status);render();return;}
+          const job=neuralJob;clearTimeout(job.timer);neuralJob=null;
+          if(data.error)job.reject(Error(data.error));else job.resolve(data);
+        };
+        neuralWorker.onerror=()=>{
+          const job=neuralJob;neuralJob=null;resetNeuralWorker();
+          if(job){clearTimeout(job.timer);job.reject(Error("Model worker failed; try again"));}
+        };
+      }
+      const id=++neuralId;
+      const timer=setTimeout(()=>{
+        if(neuralJob?.id!==id)return;
+        neuralJob=null;resetNeuralWorker();reject(Error("Generation timed out; try again"));
+      },180000);
+      neuralJob={id,resolve,reject,timer};
+      neuralWorker.postMessage({id,track});
+    }catch(error){
+      if(neuralJob)clearTimeout(neuralJob.timer);
+      neuralJob=null;resetNeuralWorker();reject(error);
+    }
   });
 }
-function generateInstrument(instrument){
-  const build=instrument==="pluck"?composePluck:composePad;
-  // Ignore velocity and absolute transposition when spotting recent repeats.
-  state[instrument].notes=freshPattern(instrument,build,notes=>
-    notes.map(note=>[note.step,note.pitch-notes[0].pitch,note.len].join(":")).join("|"));
-  const events=new Set(state[instrument].notes.map(note=>note.step)).size;
-  inform(instrument.toUpperCase()+" · "+events+(instrument==="pad"?" chords":" notes")+" · C minor");
+function validPattern(track,pattern){
+  if(track==="drums"){
+    return pattern&&["kick","snare","hat"].every(key=>Array.isArray(pattern[key])&&
+      pattern[key].every(step=>Number.isInteger(step)&&step>=0&&step<16));
+  }
+  return Array.isArray(pattern)&&pattern.length>0&&pattern.length<=48&&pattern.every(note=>
+    Number.isInteger(note.step)&&note.step>=0&&note.step<16&&
+    Number.isInteger(note.pitch)&&note.pitch>=36&&note.pitch<=96&&
+    Number.isInteger(note.len)&&note.len>0&&note.step+note.len<=16&&
+    Number.isFinite(note.velocity)&&note.velocity>0&&note.velocity<=1);
 }
+function installPattern(track,pattern){
+  if(track==="drums")state.drums=pattern;else state[track].notes=pattern;
+}
+function applyPendingPatterns(){
+  let changed=false;
+  for(const track of Object.keys(pendingPatterns)){
+    installPattern(track,pendingPatterns[track]);delete pendingPatterns[track];changed=true;
+  }
+  if(changed)render();
+}
+async function generateTrack(track){
+  if(state.generating){inform("Generation already running");return false;}
+  state.generating=true;
+  const revision=++trackRevision[track];
+  inform("Loading model for "+track.toUpperCase()+"…");render();
+  try{
+    const result=await requestNeuralPattern(track);
+    if(trackRevision[track]!==revision)return false;
+    if(!validPattern(track,result.pattern))throw Error("Invalid generated pattern");
+    if(state.playing)pendingPatterns[track]=result.pattern;
+    else installPattern(track,result.pattern);
+    inform(track.toUpperCase()+" · "+(result.chord?result.chord+" · ":"")+
+      (state.playing?"queued for next bar":result.model));
+    return true;
+  }catch(error){
+    if(trackRevision[track]===revision)inform("AI: "+error.message);
+    return false;
+  }finally{state.generating=false;render();}
+}
+function generateDrums(){return generateTrack("drums");}
+function generateInstrument(instrument){return generateTrack(instrument);}
 function restoreDemo(instrument){
+  ++trackRevision[instrument];delete pendingPatterns[instrument];
   state[instrument].notes=demoNotes(instrument);
   inform("Demo pattern: "+instrument.toUpperCase()+" restored");
 }
@@ -449,22 +403,22 @@ const choices={
     {label:"GENERATE ALL",sub:"Not implemented yet",disabled:true},
   ],
   aiTrack:()=>[
-    {label:"PLUCK",sub:"New melody",action:()=>{generateInstrument("pluck");render();}},
-    {label:"PAD",sub:"New harmony",action:()=>{generateInstrument("pad");render();}},
-    {label:"DRUMS",sub:"Browser algorithm, not DrumsRNN",action:()=>{generateDrums();render();}},
+    {label:"PLUCK",sub:"MelodyRNN",disabled:state.generating,action:()=>{generateInstrument("pluck");render();}},
+    {label:"PAD",sub:"Multitrack MusicVAE",disabled:state.generating,action:()=>{generateInstrument("pad");render();}},
+    {label:"DRUMS",sub:"DrumsRNN",disabled:state.generating,action:()=>{generateDrums();render();}},
   ],
   pluck:()=>[
-    {label:"GENERATE MELODY",sub:"Pluck · new melody",action:()=>{generateInstrument("pluck");render();}},
+    {label:"GENERATE MELODY",sub:"MelodyRNN",disabled:state.generating,action:()=>{generateInstrument("pluck");render();}},
     {label:"DEMO PHRASE",sub:"Restore the demo notes",action:()=>{restoreDemo("pluck");render();}},
     {label:"LEVEL",sub:"◀ / ▶ · Pluck level",value:format(state.pluck.level),key:"pluckLevel"},
   ],
   pad:()=>[
-    {label:"GENERATE CHORDS",sub:"Pad · new harmony",action:()=>{generateInstrument("pad");render();}},
+    {label:"GENERATE CHORDS",sub:"Multitrack MusicVAE",disabled:state.generating,action:()=>{generateInstrument("pad");render();}},
     {label:"DEMO CHORDS",sub:"Restore the demo chords",action:()=>{restoreDemo("pad");render();}},
     {label:"LEVEL",sub:"◀ / ▶ · Pad level",value:format(state.pad.level),key:"padLevel"},
   ],
   drums:()=>[
-    {label:"GENERATE RHYTHM",sub:"Browser simulation",action:()=>{generateDrums();render();}},
+    {label:"GENERATE RHYTHM",sub:"DrumsRNN",disabled:state.generating,action:()=>{generateDrums();render();}},
     {label:"KICK",sub:"Tap steps on HOME to toggle hits",value:state.drums.kick.length},
     {label:"SNARE",value:state.drums.snare.length},
     {label:"HAT",value:state.drums.hat.length},
@@ -591,7 +545,7 @@ function render(){
       (state.editing?'<div class="notice">◉ Rotate ring · OK to confirm</div>':
        state.page==="fx"?'<div class="notice">Rotate ring · OK to select / edit</div>':
        state.page==="tempo"?'<div class="notice">40–240 BPM · changes apply on the next step</div>':
-       state.page==="ai"?'<div class="notice">Browser generation does not use Magenta / Rust</div>':"");
+       state.page==="ai"?'<div class="notice">Neural models load on demand · Internet required</div>':"");
   }
 }
 out.addEventListener("click",(event)=>{
@@ -602,6 +556,7 @@ out.addEventListener("click",(event)=>{
       inform("Pattern: "+(voice==="pluck"?"PLUCK":"PAD")+" · USER");
       return;
     }
+    ++trackRevision.drums;delete pendingPatterns.drums;
     const steps=state.drums[voice],at=steps.indexOf(index);
     if(at===-1)steps.push(index);else steps.splice(at,1);
     steps.sort((a,b)=>a-b);
