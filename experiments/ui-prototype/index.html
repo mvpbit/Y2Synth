@@ -391,14 +391,11 @@ function back(){
 function home(){state.page="home";state.stack=[];state.focus=0;state.editing=false;render();}
 const choices={
   settings:()=>[
-    {label:"AI-GENERATED",sub:"Instruments",action:()=>go("instruments")},
-    {label:"MASTER FX",sub:"Delay → Reverb",action:()=>go("fx")},
-    {label:"TEMPO",sub:state.bpm+" BPM",action:()=>go("tempo")},
-  ],
-  instruments:()=>[
-    {label:"PLUCK",sub:"AI-generated · Follows PAD",action:()=>go("pluck")},
-    {label:"PAD",sub:"AI-generated · "+(state.padKey?NeuralPatterns.keyName(state.padKey):"Random key"),action:()=>go("pad")},
     {label:"DRUMS",sub:"AI-generated · DrumsRNN",action:()=>go("drums")},
+    {label:"PAD",sub:"AI-generated · "+(state.padKey?NeuralPatterns.keyName(state.padKey):"Random key"),action:()=>go("pad")},
+    {label:"PLUCK",sub:"AI-generated · Follows PAD",action:()=>go("pluck")},
+    {label:"FX",sub:"Delay → Reverb",action:()=>go("fx")},
+    {label:"TEMPO",sub:state.bpm+" BPM",action:()=>go("tempo")},
   ],
   pluck:()=>[
     {label:"GENERATE MELODY",sub:"AI-generated · "+(hasPad()?"Follows PAD":"Generate PAD first"),disabled:state.generating||!hasPad(),action:()=>{generateInstrument("pluck");render();}},
@@ -494,14 +491,14 @@ function renderHome(){
 }
 function render(){
   $("screen-tempo").textContent=state.bpm+" BPM";
-  $("crumb").textContent="● "+({home:"HOME",settings:"PLAY SETTINGS",instruments:"AI-GENERATED",
+  $("crumb").textContent="● "+({home:"HOME",settings:"PLAY SETTINGS",
     pluck:"PLUCK",pad:"PAD",drums:"DRUMS",fx:"MASTER FX",tempo:"TEMPO"}[state.page]||state.page);
   $("screen-message").textContent=state.message;
   $("screen-step").textContent=state.page==="home"?"":String(state.playhead+1).padStart(2,"0")+" / 16";
   if(state.page==="home"){out.innerHTML=renderHome();}
   else{
     const items=choices[state.page]?.()||[];
-    out.innerHTML='<div class="eyebrow">'+(state.page==="fx"?"DELAY → REVERB":state.page==="instruments"?"AI-GENERATED":state.page.toUpperCase())+'</div>'+
+    out.innerHTML='<div class="eyebrow">'+(state.page==="fx"?"DELAY → REVERB":state.page.toUpperCase())+'</div>'+
       '<div class="menu'+(state.page==="fx"?" fx-menu":"")+'">'+items.map((item,i)=>
         '<button class="item '+(state.focus===i?"selected ":"")+(state.focus===i&&state.editing?"editing":"")+'" data-index="'+i+'" '+(item.disabled?"disabled":"")+'>'+
         '<span>'+item.label+(item.sub?'<small>'+item.sub+'</small>':"")+'</span>'+
@@ -509,8 +506,7 @@ function render(){
       ).join('')+'</div>'+
       (state.editing?'<div class="notice">◉ Rotate ring · OK to confirm</div>':
        state.page==="fx"?'<div class="notice">Rotate ring · OK to select / edit</div>':
-       state.page==="tempo"?'<div class="notice">40–240 BPM · changes apply on the next step</div>':
-       state.page==="instruments"?'<div class="notice">Models load on demand · Internet required</div>':"");
+       state.page==="tempo"?'<div class="notice">40–240 BPM · changes apply on the next step</div>':"");
   }
 }
 out.addEventListener("click",(event)=>{

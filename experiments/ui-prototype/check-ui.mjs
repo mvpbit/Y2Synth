@@ -32,7 +32,7 @@ for (const { selector, height } of sizes) {
 assert.equal(sizes.reduce((total, item) => total + item.height, 0), 360);
 assert.match(html, /data-native-width="480" data-native-height="360"/);
 assert.match(html, /AudioContext/);
-assert.match(html, /AI-GENERATED/);
+assert.match(html, /AI-generated/);
 assert.match(html, /fx:\{delay:true/);
 // Click wheel hardware geometry: all controls are integrated in one ring.
 for (const id of ["wheel", "return", "prev", "next", "play", "center"]) {
@@ -99,15 +99,20 @@ assertRuntime(!state.playing&&audio.ctx===null,"Empty PLAY must not start audio"
 const homeMarkup=renderHome();
 assertRuntime((homeMarkup.match(/<button/g)||[]).length===1&&homeMarkup.includes("data-transport"),"HOME must contain only the transport button");
 assertRuntime(!homeMarkup.includes("data-step")&&!homeMarkup.includes("seq-row"),"HOME must not render a note grid");
-assertRuntime(choices.settings()[0].label==="AI-GENERATED","AI-only settings entry");
+assertRuntime(choices.settings().map(row=>row.label).join(",")==="DRUMS,PAD,PLUCK,FX,TEMPO","Settings must expose the five destinations in order");
+assertRuntime(!choices.instruments,"No intermediate instrument submenu");
 for(const instrument of ["pluck","pad","drums"]){
   assertRuntime(choices[instrument]()[0].sub.startsWith("AI-generated"),"Instrument must be AI-generated");
   assertRuntime(choices[instrument]().every(row=>row.label.startsWith("GENERATE")||row.label==="LEVEL"),"No manual notes/demo controls");
 }
 assertRuntime(choices.fx().map(row=>row.key).join(",")==="delay,delaySteps,delayFeedback,delayWet,reverb,reverbSize,reverbDamping,reverbWet","FX controls must stay intact");
-activate();activate();activate();
+activate();activate(2);
 assertRuntime(state.page==="pluck","OK navigation must reach PLUCK");
-back();assertRuntime(state.page==="instruments","BACK must return to instrument picker");
+back();assertRuntime(state.page==="settings","BACK must return directly to settings");
+for(const [index,page] of ["drums","pad","pluck","fx","tempo"].entries()){
+  activate(index);assertRuntime(state.page===page,"Direct settings destination: "+page);
+  back();assertRuntime(state.page==="settings","Direct BACK from "+page);
+}
 home();
 assertRuntime(await generateInstrument("pluck")===false&&!state.generating,"PLUCK requires PAD first");
 const pluckBefore=JSON.stringify(state.pluck.notes),drumsBefore=JSON.stringify(state.drums);
@@ -206,10 +211,10 @@ audio.ctx=null;state.bpm=120;
 home();
 wheelTurn(1);
 if (state.page !== "settings" || state.focus !== 0) throw new Error("Home wheel navigation");
-wheelTurn(1);
-if (state.focus !== 1) throw new Error("Clockwise scroll should select FX");
+wheelTurn(3);
+if (state.focus !== 3) throw new Error("Clockwise scroll should select FX");
 wheelTurn(-1);
-if (state.focus !== 0) throw new Error("Anticlockwise scroll should select AI-generated");
+if (state.focus !== 2) throw new Error("Anticlockwise scroll should select PLUCK");
 go("tempo");
 if (state.editing) throw new Error("New page must exit edit mode");
 activate();
@@ -233,7 +238,7 @@ const touch = {pointerId:7,clientX:320,clientY:170,preventDefault(){},
 startWheelGesture(touch);
 if (!wheelMotion.active) throw new Error("Drag did not start");
 moveWheelGesture({...touch,clientX:170,clientY:320});
-if (state.page !== "settings" || state.focus !== 0) {
+if (state.page !== "settings" || state.focus !== 3) {
   throw new Error("Clockwise drag must scroll multiple menu steps");
 }
 finishWheelGesture(touch);
