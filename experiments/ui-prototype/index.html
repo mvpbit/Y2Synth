@@ -391,9 +391,9 @@ function back(){
 function home(){state.page="home";state.stack=[];state.focus=0;state.editing=false;render();}
 const choices={
   settings:()=>[
-    {label:"DRUMS",sub:"AI-generated · DrumsRNN",action:()=>go("drums")},
-    {label:"PAD",sub:"AI-generated · "+(state.padKey?NeuralPatterns.keyName(state.padKey):"Random key"),action:()=>go("pad")},
-    {label:"PLUCK",sub:"AI-generated · Follows PAD",action:()=>go("pluck")},
+    {label:"DRUMS",action:()=>go("drums")},
+    {label:"PAD",action:()=>go("pad")},
+    {label:"PLUCK",action:()=>go("pluck")},
     {label:"FX",sub:"Delay → Reverb",action:()=>go("fx")},
     {label:"TEMPO",sub:state.bpm+" BPM",action:()=>go("tempo")},
   ],
