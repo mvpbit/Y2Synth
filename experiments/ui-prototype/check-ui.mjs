@@ -206,6 +206,34 @@ for(const instrument of ["pluck","pad"]){
   if(Math.abs(soft/loud-.5)>.00001)throw new Error("Velocity not applied: "+instrument);
 }
 audio.ctx=null;state.bpm=120;
+// Drum level is a track gain before the common FX, including both snare layers.
+const drumNotesBefore=JSON.stringify(state.drums),pluckLevelBefore=state.pluck.level,padLevelBefore=state.pad.level;
+go("drums");activate(1);wheelTurn(-2);activate();
+assertRuntime(Math.abs(state.drumsLevel-.9)<.00001,"Drum LEVEL must use wheel edit mode");
+assertRuntime(JSON.stringify(state.drums)===drumNotesBefore&&state.pluck.level===pluckLevelBefore&&state.pad.level===padLevelBefore,"Drum LEVEL must not alter notes or other levels");
+for(let i=0;i<25;i++)edit("drumsLevel",-1);
+assertRuntime(state.drumsLevel===0,"Drums must reach mute");
+const edges=[],gainChanges=[];
+const parameter={value:0,setValueAtTime(){},exponentialRampToValueAtTime(){}};
+function graphNode(){return {frequency:{...parameter},gain:{...parameter},connect(target){edges.push([this,target]);return target;},start(){},stop(){}};}
+audio.mix=graphNode();
+audio.drums=graphNode();
+audio.drums.gain.setTargetAtTime=(value,time,ramp)=>gainChanges.push({value,time,ramp});
+audio.ctx={currentTime:10,createOscillator:graphNode,createGain:graphNode,createBufferSource:graphNode,createBiquadFilter:graphNode};
+updateDrumsLevel();
+assertRuntime(gainChanges[0].value===0&&gainChanges[0].ramp>0,"Mute must reach the real drum gain with smoothing");
+for(const voice of ["kick","snare","hat"])hitDrum(voice,10);
+assertRuntime(edges.filter(([,target])=>target===audio.drums).length===4,"Kick, both snare layers and hat must route through drum LEVEL");
+assertRuntime(!edges.some(([,target])=>target===audio.mix),"No drum voice may bypass its level");
+audio.ctx=null;
+for(let i=0;i<25;i++)edit("drumsLevel",1);
+assertRuntime(state.drumsLevel===1,"Drum LEVEL must clamp to unity");
+state.drumsLevel=.4;
+pending=generateDrums();
+neuralWorker.onmessage({data:{id:neuralJob.id,pattern:{kick:[0],snare:[4],hat:[2]},model:"drum_kit_rnn"}});
+assertRuntime(await pending&&state.drumsLevel===.4,"Regeneration must preserve drum LEVEL");
+audio.drums=null;state.drumsLevel=1;
+
 
 // Menu movement, value edit mode and round-the-ring gestures are independent.
 home();

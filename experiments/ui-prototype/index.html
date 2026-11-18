@@ -104,7 +104,7 @@ const state = {
   page:"home", stack:[], focus:0, editing:false, bpm:120, playing:false, paused:false, playhead:0,
   // Instrument roles are fixed: Pluck and Pad are separate named instruments.
   pluck:{level:0.67,notes:[]}, pad:{level:0.6,notes:[]},
-  drums:{kick:[],snare:[],hat:[]},
+  drums:{kick:[],snare:[],hat:[]}, drumsLevel:1,
   padKey:null, rawPluck:[],
   message:"OK → settings · generate an instrument",
   fx:{delay:true, delaySteps:2, delayFeedback:.38, delayWet:.3,
@@ -123,16 +123,16 @@ function tone(freq,time,duration,gain,type="sine",peakDelay=.01,target=null){
   osc.connect(env).connect(target||audio.mix);
   osc.start(time);osc.stop(time+duration+.02);
 }
-function noise(time,duration,gain,cutoff,kind){
+function noise(time,duration,gain,cutoff,kind,target=null){
   const ctx=audio.ctx;
   const source=ctx.createBufferSource(),filter=ctx.createBiquadFilter(),env=ctx.createGain();
   source.buffer=audio.noise;filter.type=kind;filter.frequency.value=cutoff;
   env.gain.setValueAtTime(Math.max(gain,.0002),time);
   env.gain.exponentialRampToValueAtTime(.0001,time+duration);
-  source.connect(filter).connect(env).connect(audio.mix);
+  source.connect(filter).connect(env).connect(target||audio.mix);
   source.start(time);source.stop(time+duration+.01);
 }
-const audio={ctx:null, timer:null, nextTime:0, step:0, mix:null,
+const audio={ctx:null, timer:null, nextTime:0, step:0, mix:null, drums:null,
             delay:null,feedback:null,delayWet:null,convolver:null,reverbWet:null,analyser:null,noise:null};
 function makeImpulse(ctx,size,damping){
   const length=Math.floor(ctx.sampleRate*(.5+size*2.6));
@@ -162,12 +162,17 @@ function rebuildReverb(){
   if(!audio.ctx)return;
   audio.convolver.buffer=makeImpulse(audio.ctx,state.fx.reverbSize,state.fx.reverbDamping);
 }
+function updateDrumsLevel(){
+  if(audio.ctx&&audio.drums)audio.drums.gain.setTargetAtTime(state.drumsLevel,audio.ctx.currentTime,.012);
+}
 function initAudio(){
   if(audio.ctx)return;
   const Context=window.AudioContext||window.webkitAudioContext;
   if(!Context)throw new Error("Web Audio API is not available in this browser");
   const ctx=new Context();audio.ctx=ctx;
   audio.mix=ctx.createGain();audio.mix.gain.value=.65;
+  audio.drums=ctx.createGain();audio.drums.gain.value=state.drumsLevel;
+  audio.drums.connect(audio.mix);
   const intoReverb=ctx.createGain();
   audio.delay=ctx.createDelay(4.0);audio.feedback=ctx.createGain();audio.delayWet=ctx.createGain();
   audio.mix.connect(intoReverb);
@@ -195,12 +200,12 @@ function hitDrum(voice,time){
     osc.frequency.exponentialRampToValueAtTime(46,time+.14);
     env.gain.setValueAtTime(.0001,time);env.gain.exponentialRampToValueAtTime(.75,time+.004);
     env.gain.exponentialRampToValueAtTime(.0001,time+.32);
-    osc.connect(env).connect(audio.mix);osc.start(time);osc.stop(time+.34);
+    osc.connect(env).connect(audio.drums);osc.start(time);osc.stop(time+.34);
   }else if(voice==="snare"){
-    noise(time,.19,.42,1050,"highpass");
-    tone(183,time,.13,.14,"triangle");
+    noise(time,.19,.42,1050,"highpass",audio.drums);
+    tone(183,time,.13,.14,"triangle",.01,audio.drums);
   }else{
-    noise(time,.067,.17,6000,"highpass");
+    noise(time,.067,.17,6000,"highpass",audio.drums);
   }
 }
 function playInstrumentNote(note,time,instrument){
@@ -407,6 +412,7 @@ const choices={
   ],
   drums:()=>[
     {label:"GENERATE DRUMS",disabled:state.generating,action:()=>{generateDrums();render();}},
+    {label:"LEVEL",sub:"◀ / ▶ · Drums level",value:format(state.drumsLevel),key:"drumsLevel"},
   ],
   tempo:()=>[{label:"BPM",sub:"◀ / ▶ adjusts by 2 BPM",value:state.bpm,key:"bpm"}],
   fx:()=>[
@@ -423,6 +429,10 @@ const choices={
 function edit(key,direction){
   let value;
   if(key==="bpm"){state.bpm=inRange(state.bpm+direction*2,40,240);value=state.bpm;}
+  else if(key==="drumsLevel"){
+    state.drumsLevel=inRange(Math.round((state.drumsLevel+direction*.05)*100)/100,0,1);
+    value=state.drumsLevel;updateDrumsLevel();
+  }
   else if(key==="pluckLevel"||key==="padLevel"){
     const instrument=key==="pluckLevel"?"pluck":"pad";
     state[instrument].level=inRange(Math.round((state[instrument].level+direction*.05)*100)/100,0,1);
