@@ -33,7 +33,8 @@ async function generate(request){
   }
   postMessage({id,status:"Generating "+track.toUpperCase()+"…"});
   const model=models[track];
-  const chord=track==="pad"?["Cm","Eb","Fm","Gm","Ab","Bb"][Math.floor(Math.random()*6)]:null;
+  const key=track==="pad"?NeuralPatterns.randomKey(request.previousKey):null;
+  const chord=key?NeuralPatterns.chordFor(key):null;
   let lastError;
   for(let attempt=0;attempt<3;attempt++){
     try{
@@ -46,8 +47,8 @@ async function generate(request){
         sequence=await model.continueSequence(primer,16,track==="drums"?1.2:1.05);
       }
       const pattern=track==="drums"?NeuralPatterns.drumNotes(sequence):
-        NeuralPatterns.instrumentNotes(sequence,track);
-      postMessage({id,pattern,chord,model:CHECKPOINTS[track].split("/")[1]});
+        NeuralPatterns.instrumentNotes(sequence,track,key||undefined);
+      postMessage({id,pattern,chord,key,model:CHECKPOINTS[track].split("/")[1]});
       return;
     }catch(error){lastError=error;}
   }

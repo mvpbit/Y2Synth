@@ -91,7 +91,7 @@ const document = {
   addEventListener() {},
   querySelectorAll() { return []; },
 };
-await runInNewContext("(async()=>{\n" + script[1] + String.raw`
+await runInNewContext(readFileSync(new URL("./neural-common.js",import.meta.url),"utf8")+"\n(async()=>{\n" + script[1] + String.raw`
 const assertRuntime=(ok,message)=>{if(!ok)throw Error(message);};
 assertRuntime(!hasMusic(),"Fresh session must not contain demo notes");
 await transport();
@@ -109,12 +109,13 @@ activate();activate();activate();
 assertRuntime(state.page==="pluck","OK navigation must reach PLUCK");
 back();assertRuntime(state.page==="instruments","BACK must return to instrument picker");
 home();
+assertRuntime(await generateInstrument("pluck")===false&&!state.generating,"PLUCK requires PAD first");
 const pluckBefore=JSON.stringify(state.pluck.notes),drumsBefore=JSON.stringify(state.drums);
 const samplePad=[{step:0,pitch:60,len:16,velocity:.7},{step:0,pitch:63,len:16,velocity:.7},{step:0,pitch:67,len:16,velocity:.7}];
 let pending=generateInstrument("pad");
 assertRuntime(state.generating,"Loading must lock generation");
 assertRuntime(await generateInstrument("pluck")===false,"Concurrent generation must be rejected");
-neuralWorker.onmessage({data:{id:neuralJob.id,pattern:samplePad,model:"multitrack_chords",chord:"Cm"}});
+neuralWorker.onmessage({data:{id:neuralJob.id,pattern:samplePad,model:"multitrack_chords",key:{root:0,mode:"minor"},chord:"Cm"}});
 assertRuntime(await pending,"PAD result not committed");
 assertRuntime(JSON.stringify(state.pluck.notes)===pluckBefore,"PAD changed PLUCK");
 assertRuntime(JSON.stringify(state.drums)===drumsBefore,"PAD changed drums");
@@ -129,15 +130,34 @@ assertRuntime(await pending===false,"Invalid notes accepted");
 pending=generateInstrument("pad");
 ++trackRevision.pad;
 const savedPad=JSON.stringify(state.pad.notes);
-neuralWorker.onmessage({data:{id:neuralJob.id,pattern:samplePad,model:"multitrack_chords"}});
+neuralWorker.onmessage({data:{id:neuralJob.id,pattern:samplePad,model:"multitrack_chords",key:{root:0,mode:"minor"}}});
 assertRuntime(await pending===false&&JSON.stringify(state.pad.notes)===savedPad,"Stale AI replaced the saved phrase");
 state.playing=true;
 pending=generateInstrument("pad");
-neuralWorker.onmessage({data:{id:neuralJob.id,pattern:samplePad,model:"multitrack_chords"}});
+neuralWorker.onmessage({data:{id:neuralJob.id,pattern:samplePad,model:"multitrack_chords",key:{root:0,mode:"minor"}}});
 assertRuntime(await pending,"Queued generation failed");
 assertRuntime(JSON.stringify(state.pad.notes)===savedPad,"Pattern changed before bar boundary");
 applyPendingPatterns();
 assertRuntime(JSON.stringify(state.pad.notes)===JSON.stringify(samplePad),"Queued pattern lost");
+state.playing=false;
+// Install a neural melody and verify it is harmonized, not used as fixed C minor.
+const rawMelody=[{step:0,pitch:61,len:16,velocity:.8}];
+pending=generateInstrument("pluck");
+neuralWorker.onmessage({data:{id:neuralJob.id,pattern:rawMelody,model:"melody_rnn"}});
+assertRuntime(await pending,"PLUCK generation failed");
+assertRuntime(state.pluck.notes[0].pitch%12===0,"Strong PLUCK note must follow PAD chord");
+const oldPluck=JSON.stringify(state.pluck.notes),oldPad=JSON.stringify(state.pad.notes);
+state.playing=true;
+pending=generateInstrument("pad");
+const nextPad=[{step:0,pitch:62,len:8,velocity:.7},{step:0,pitch:66,len:8,velocity:.7},
+ {step:8,pitch:69,len:8,velocity:.7},{step:8,pitch:73,len:8,velocity:.7}];
+neuralWorker.onmessage({data:{id:neuralJob.id,pattern:nextPad,key:{root:2,mode:"major"},model:"multitrack_chords"}});
+assertRuntime(await pending,"New PAD generation failed");
+assertRuntime(JSON.stringify(state.pluck.notes)===oldPluck&&JSON.stringify(state.pad.notes)===oldPad&&state.padKey.root===0,"Harmony changed before bar boundary");
+applyPendingPatterns();
+assertRuntime(state.padKey.root===2&&state.padKey.mode==="major","New key was not installed");
+assertRuntime(state.pluck.notes.length===2&&state.pluck.notes[0].pitch%12===2&&state.pluck.notes[1].pitch%12===1,"Held PLUCK must follow PAD chord changes");
+assertRuntime(JSON.stringify(state.rawPluck)===JSON.stringify(rawMelody),"Retuning must preserve model melody for future PAD changes");
 state.playing=false;
 pending=generateDrums();
 neuralWorker.onerror();
@@ -248,5 +268,14 @@ assert.throws(()=>instrumentNotes({quantizationInfo:{stepsPerQuarter:4},notes:[
 assert.deepEqual(JSON.parse(JSON.stringify(drumNotes({quantizationInfo:{stepsPerQuarter:4},notes:[
  {pitch:36,quantizedStartStep:0},{pitch:38,quantizedStartStep:4},{pitch:42,quantizedStartStep:8}
 ]}))),{kick:[0],snare:[4],hat:[8]});
+for(let root=0;root<12;root++)for(const mode of ["minor","major"]){
+  const key={root,mode},scale=sandbox.NeuralPatterns.scaleFor(key);
+  const chord=[0,mode==="minor"?3:4,7].map(offset=>({step:0,pitch:60+(root+offset)%12,len:16,velocity:.7}));
+  const melody=sandbox.NeuralPatterns.harmonizePluck([{step:0,pitch:61,len:16,velocity:.8}],chord,key);
+  assert.ok(melody.every(note=>scale.includes(note.pitch%12)));
+  assert.ok(chord.some(note=>note.pitch%12===melody[0].pitch%12));
+  const next=sandbox.NeuralPatterns.randomKey(key);
+  assert.ok(next.root!==root||next.mode!==mode,"PAD key must change on regeneration");
+}
 new Script(readFileSync(new URL("./neural-worker.js",import.meta.url),"utf8"));
 console.log("OK: display, wheel, transport, neural failure/queue isolation and model note adapters.");

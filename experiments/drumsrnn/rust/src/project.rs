@@ -5,6 +5,7 @@
 //! a synth engine, or AI for synth tracks.
 
 use crate::master_fx::MasterEffects;
+use crate::harmony::Key;
 use std::io;
 
 /// Which track to edit or regenerate. The UI knows this enum, not the DSP.
@@ -62,6 +63,8 @@ pub struct MusicProject<Synth1, Synth2, Drums> {
     mode: CreationMode,
     bpm: f32,
     master_fx: MasterEffects,
+    pad_key: Key,
+    raw_pluck: Option<Synth1>,
     synth1: Option<Track<Synth1>>,
     synth2: Option<Track<Synth2>>,
     drums: Option<Track<Drums>>,
@@ -81,6 +84,8 @@ impl<Synth1, Synth2, Drums> Default for MusicProject<Synth1, Synth2, Drums> {
             mode: CreationMode::User,
             bpm: 120.0,
             master_fx: MasterEffects::default(),
+            pad_key: Key::default(),
+            raw_pluck: None,
             synth1: None,
             synth2: None,
             drums: None,
@@ -89,6 +94,11 @@ impl<Synth1, Synth2, Drums> Default for MusicProject<Synth1, Synth2, Drums> {
 }
 
 impl<Synth1, Synth2, Drums> MusicProject<Synth1, Synth2, Drums> {
+    pub fn pad_key(&self) -> Key { self.pad_key }
+    pub fn set_pad_key(&mut self, key: Key) { self.pad_key=key; }
+    pub fn raw_pluck(&self) -> Option<&Synth1> { self.raw_pluck.as_ref() }
+    pub fn set_raw_pluck(&mut self, content: Synth1) { self.raw_pluck=Some(content); }
+
     pub fn mode(&self) -> CreationMode {
         self.mode
     }

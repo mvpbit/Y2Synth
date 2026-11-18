@@ -25,7 +25,6 @@ use y2synth_drumsrnn_weights::{
     kit::{pitch_by_name, DrumKit, VOICE_NAMES},
     load_checkpoint,
     master_fx::MasterEffects,
-    melody::RhythmContext,
     neural::NeuralSynths,
     project::TrackId,
     realtime::RealtimePlayer,
@@ -288,6 +287,7 @@ fn show_synth(app: &ApplicationController, id: TrackId) {
     let track = if id == TrackId::Synth2 { app.session().current().synth2() } else { app.session().current().synth1() };
     if let Some(track) = track {
         println!("{}: level {:.2}, {} notes, source {:?}",track_name(id),track.content.level,track.content.notes.len(),track.source);
+        if id==TrackId::Synth2 {println!("  Key: {}",app.session().current().pad_key().name());}
         for n in &track.content.notes { println!("  step {}: MIDI {}, length {}, velocity {:.2}",n.step,n.pitch,n.length_steps,n.velocity); }
     } else { println!("{} is empty; use generate or demo.",track_name(id)); }
 }
@@ -374,14 +374,12 @@ fn run() -> Result<(), Box<dyn Error>> {
         Ok(pattern)
     };
     let models_root = options.weights.parent().unwrap_or(Path::new("."));
-    let mut neural = NeuralSynths::new(models_root, options.seed ^ 0xa57d_3e12_5b42_c908);
-    let mut synth_generator = |preset: SynthPreset, level: f32, _: RhythmContext| {
-        neural.generate(preset, level)
-    };
+    let mut synth_generator = NeuralSynths::new(models_root, options.seed ^ 0xa57d_3e12_5b42_c908);
     let mut menu = MenuController::default();
 
     println!();
-    println!("Ready: play | stop | regenerate | pluck generate | pad generate | fx | menu | help | quit");
+    println!("Ready: pad generate | pluck generate | regenerate | play | stop | fx | menu | help | quit");
+    println!("Generate PAD first: it chooses a random key; PLUCK follows its harmony.");
     println!("Wheel simulation: center | next | prev | back | wheel-play");
     println!("Models: drums=drum_kit_rnn, pluck=melody_rnn, pad=multitrack_chords.");
     println!("New loops and edits are saved in RAM, not to disk.");

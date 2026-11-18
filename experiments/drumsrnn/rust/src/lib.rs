@@ -14,6 +14,7 @@ pub mod master_fx;
 pub mod synth1;
 pub mod melody;
 pub mod neural;
+pub mod harmony;
 pub mod project;
 pub mod application;
 pub mod ui;

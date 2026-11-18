@@ -3,6 +3,7 @@
 use crate::{Checkpoint, Tensor, load_checkpoint_filtered};
 use crate::lstm::{BasicLstmCell, LstmState};
 use crate::generation::{Sampling, SamplingRng};
+use crate::harmony::Key;
 use crate::synth1::{NoteEvent, SynthPreset, SynthTrack};
 use std::{io, path::{Path, PathBuf}};
 
@@ -109,11 +110,6 @@ pub fn multitrack_tokens(cp: &Checkpoint, z: &[f32], chord: usize, sampling: Sam
     }
     Ok(tokens)
 }
-fn pitch_in_scale(mut p: i32, low: i32) -> u8 {
-    while p < low { p += 12; } while p > 84 { p -= 12; }
-    (low..=84).filter(|p| [0,2,3,5,7,8,10].contains(&(p%12)))
-        .min_by_key(|&x| ((x-p).abs(),x)).unwrap() as u8
-}
 pub fn melody_track(tokens: &[usize], level: f32) -> io::Result<SynthTrack> {
     if tokens.len() != 16 || tokens.iter().any(|&t| t >= 130) { return Err(invalid("Invalid melody tokens")); }
     let mut notes = Vec::new();
@@ -124,7 +120,7 @@ pub fn melody_track(tokens: &[usize], level: f32) -> io::Result<SynthTrack> {
             if let Some((start,pitch)) = active.take() {
                 if step > start { notes.push(NoteEvent {step:start,pitch,length_steps:step-start,velocity:0.75}); }
             }
-            if t >= 2 { active = Some((step,pitch_in_scale((t-2) as i32,55))); }
+            if t >= 2 { active = Some((step,{ let mut p=(t-2) as i32; while p<55 {p+=12;} while p>84 {p-=12;} p as u8 })); }
         }
     }
     let track = SynthTrack {preset:SynthPreset::Pluck,notes,level};
@@ -132,14 +128,16 @@ pub fn melody_track(tokens: &[usize], level: f32) -> io::Result<SynthTrack> {
     if track.notes.is_empty() { return Err(invalid("MelodyRNN returned silence")); }
     Ok(track)
 }
-fn normalize_pad(raw: &[(usize,usize,u8,f32)]) -> Vec<NoteEvent> {
+#[cfg(test)]
+fn normalize_pad(raw: &[(usize,usize,u8,f32)]) -> Vec<NoteEvent> { normalize_pad_in_key(raw,Key::default()) }
+fn normalize_pad_in_key(raw: &[(usize,usize,u8,f32)], key: Key) -> Vec<NoteEvent> {
     let mut result: Vec<NoteEvent> = Vec::new();
     for &(start,end,pitch,velocity) in raw {
         if end <= start { continue; }
         let step = (start+3)/6;
         if step >= 16 { continue; }
         let end = ((end+3)/6).max(step+1).min(16);
-        let pitch = pitch_in_scale(pitch as i32,48);
+        let pitch = key.snap(pitch as i32,48);
         if let Some(old) = result.iter_mut().find(|n| n.step == step && n.pitch == pitch) {
             old.length_steps = old.length_steps.max(end-step);
         } else { result.push(NoteEvent {step,pitch,length_steps:end-step,velocity}); }
@@ -157,6 +155,9 @@ fn normalize_pad(raw: &[(usize,usize,u8,f32)]) -> Vec<NoteEvent> {
 }
 /// Split eight performance streams; select a genuinely polyphonic nondrum part.
 pub fn multitrack_track(tokens: &[usize], level: f32) -> io::Result<SynthTrack> {
+    multitrack_track_in_key(tokens,level,Key::default())
+}
+pub fn multitrack_track_in_key(tokens: &[usize], level: f32, key: Key) -> io::Result<SynthTrack> {
     if tokens.len() != 512 || tokens.iter().any(|&t| t >= 490) { return Err(invalid("Invalid multitrack tokens")); }
     let mut best = Vec::new();
     let mut best_score = (0,0);
@@ -187,7 +188,7 @@ pub fn multitrack_track(tokens: &[usize], level: f32) -> io::Result<SynthTrack> 
         for (p, queue) in active.iter().enumerate() {
             for &(start,v) in queue { raw.push((start,96,p as u8,v)); }
         }
-        let notes = normalize_pad(&raw);
+        let notes = normalize_pad_in_key(&raw,key);
         let mut overlaps = 0;
         for step in 0..16 {
             let count = notes.iter().filter(|n| n.step<=step && n.step+n.length_steps>step).count();
@@ -202,10 +203,10 @@ pub fn multitrack_track(tokens: &[usize], level: f32) -> io::Result<SynthTrack> 
 }
 /// Lazily loaded model instances have independent random streams and fixed roles.
 pub struct NeuralSynths {
-    root: PathBuf, melody: Option<Checkpoint>, pad: Option<Checkpoint>, melody_seed: u64, pad_seed: u64,
+    root: PathBuf, melody: Option<Checkpoint>, pad: Option<Checkpoint>, melody_seed: u64, pad_seed: u64, last_pad_key: Option<Key>,
 }
 impl NeuralSynths {
-    pub fn new(root: impl Into<PathBuf>, seed: u64) -> Self { Self {root:root.into(),melody:None,pad:None,melody_seed:seed,pad_seed:seed ^ 0x504144} }
+    pub fn new(root: impl Into<PathBuf>, seed: u64) -> Self { Self {root:root.into(),melody:None,pad:None,melody_seed:seed,pad_seed:seed ^ 0x504144,last_pad_key:None} }
     pub fn generate(&mut self, preset: SynthPreset, level: f32) -> io::Result<SynthTrack> {
         let state = match preset { SynthPreset::Pluck => &mut self.melody_seed, SynthPreset::Pad => &mut self.pad_seed };
         *state = state.wrapping_add(0x9e3779b97f4a7c15);
@@ -220,6 +221,8 @@ impl NeuralSynths {
         }
         let cp = slot.as_ref().unwrap();
         let mut rng = SamplingRng::new(seed);
+        let choices: Vec<Key>=(0..24).map(|n|Key::new(n%12,n<12)).filter(|key|Some(*key)!=self.last_pad_key).collect();
+        let key=choices[(rng.unit_f64()*choices.len() as f64) as usize];
         let mut error = invalid("No usable neural phrase");
         for attempt in 0..3 {
             let generated = match preset {
@@ -231,15 +234,19 @@ impl NeuralSynths {
                         let angle = std::f64::consts::TAU*rng.unit_f64();
                         z.push((radius*angle.cos()) as f32); z.push((radius*angle.sin()) as f32);
                     }
-                    let chords = [13,4,18,20,9,11];
-                    let chord = chords[(rng.unit_f64()*6.0) as usize];
-                    multitrack_track(&multitrack_tokens(cp,&z,chord,Sampling::Temperature(0.8),seed.wrapping_add(attempt))?,level)
+                    multitrack_track_in_key(&multitrack_tokens(cp,&z,key.chord_index(),Sampling::Temperature(0.8),seed.wrapping_add(attempt))?,level,key)
                 }
             };
-            match generated { Ok(track) => return Ok(track), Err(e) => error=e }
+            match generated { Ok(track) => { if preset==SynthPreset::Pad {self.last_pad_key=Some(key);} return Ok(track); }, Err(e) => error=e }
         }
         Err(error)
     }
+}
+impl crate::application::Synth1Generator for NeuralSynths {
+    fn generate_synth1(&mut self, preset: SynthPreset, level: f32, _: crate::melody::RhythmContext) -> io::Result<SynthTrack> {
+        self.generate(preset,level)
+    }
+    fn harmony_key(&self) -> Option<Key> {self.last_pad_key}
 }
 pub fn load_model(path: &Path, preset: SynthPreset) -> io::Result<Checkpoint> {
     load_checkpoint_filtered(path, |name| preset == SynthPreset::Pluck ||

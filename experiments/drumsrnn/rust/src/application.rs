@@ -8,6 +8,7 @@
 //! run outside the audio callback; publish/save is atomic.
 
 use crate::generation::GeneratedPattern;
+use crate::harmony::{Key, harmonize};
 use crate::kit::DrumKit;
 use crate::master_fx::{render_master_bar, MasterEffects};
 use crate::melody::RhythmContext;
@@ -54,6 +55,7 @@ impl<F: FnMut() -> io::Result<GeneratedPattern>> DrumGenerator for F {
 /// deterministic rule-based composition; a neural service can later implement
 /// this trait without changing MenuController or real-time audio code.
 pub trait Synth1Generator {
+    fn harmony_key(&self) -> Option<Key> { None }
     fn generate_synth1(
         &mut self, preset: SynthPreset, level: f32, rhythm: RhythmContext,
     ) -> io::Result<SynthTrack>;
@@ -238,6 +240,9 @@ impl ApplicationController {
             _ => None,
         };
         if let Some((id, preset)) = target {
+            if id==TrackId::Synth1 && self.session.current().synth2().is_none() {
+                return Err(invalid("Generate PAD first to set the harmony"));
+            }
             let existing = if id == TrackId::Synth1 { self.session.current().synth1() }
                 else { self.session.current().synth2() };
             let level = existing.map(|t| t.content.level).unwrap_or(0.75);
@@ -250,9 +255,11 @@ impl ApplicationController {
             let notes = track.notes.len();
             if id == TrackId::Synth1 {
                 self.replace_synth1(track, CreationMode::Ai, audio)?;
+                let notes=self.session.current().synth1().unwrap().content.notes.len();
                 return Ok(AppResponse::Synth1Generated { notes, preset });
             }
-            self.replace_synth2(track, CreationMode::Ai, audio)?;
+            let key=synth.harmony_key().unwrap_or(self.session.current().pad_key());
+            self.replace_pad_harmony(track,key,CreationMode::Ai,audio)?;
             return Ok(AppResponse::Synth2Generated { notes });
         }
         self.dispatch(command, drums, audio)
@@ -265,10 +272,24 @@ impl ApplicationController {
     fn replace_synth2<A: AudioPort>(
         &mut self, synth: SynthTrack, source: CreationMode, audio: &mut A,
     ) -> io::Result<()> {
+        self.replace_pad_harmony(synth,self.session.current().pad_key(),source,audio)
+    }
+
+    fn replace_pad_harmony<A: AudioPort>(
+        &mut self, synth: SynthTrack, key: Key, source: CreationMode, audio: &mut A,
+    ) -> io::Result<()> {
         synth.validate()?;
         if synth.preset != SynthPreset::Pad { return Err(invalid("PAD slot requires the Pad instrument")); }
         let mut proposed = self.session.current().clone();
+        proposed.set_pad_key(key);
         proposed.replace_synth2(synth, source);
+        if let Some(raw)=proposed.raw_pluck().cloned() {
+            let source=proposed.synth1().map(|t|t.source).unwrap_or(CreationMode::Ai);
+            let mut aligned=raw;
+            aligned.notes=harmonize(&aligned.notes,&proposed.synth2().unwrap().content.notes,key);
+            aligned.validate()?;
+            proposed.replace_synth1(aligned,source);
+        }
         let bar = self.prepare_project(&proposed)?;
         audio.queue_bar(bar)?;
         *self.session.current_mut() = proposed;
@@ -283,7 +304,13 @@ impl ApplicationController {
     ) -> io::Result<()> {
         synth.validate()?;
         let mut proposed = self.session.current().clone();
-        proposed.replace_synth1(synth, source);
+        proposed.set_raw_pluck(synth.clone());
+        let mut aligned=synth;
+        if let Some(pad)=proposed.synth2() {
+            aligned.notes=harmonize(&aligned.notes,&pad.content.notes,proposed.pad_key());
+            aligned.validate()?;
+        }
+        proposed.replace_synth1(aligned, source);
         let bar = self.prepare_project(&proposed)?;
         audio.queue_bar(bar)?;
         *self.session.current_mut() = proposed;
@@ -848,7 +875,8 @@ mod tests {
         let response=app.dispatch_neural(Command::GenerateTrack(TrackId::Synth2), &mut drums,&mut synth,&mut audio).unwrap();
         assert_eq!(response,AppResponse::Synth2Generated {notes:6});
         let pad=app.session().last_saved().unwrap().synth2().unwrap().content.clone();
-        assert_eq!(app.session().last_saved().unwrap().synth1().unwrap().content,pluck);
+        let pluck=app.session().last_saved().unwrap().synth1().unwrap().content.clone();
+        assert!(pluck.notes.iter().all(|n|Key::default().contains(n.pitch)));
         let mix=audio.queued.last().unwrap().samples.clone();
         app.dispatch_neural(Command::PlayLast,&mut drums,&mut synth,&mut audio).unwrap();
         assert_eq!(audio.queued.last().unwrap().samples,mix);
@@ -862,6 +890,45 @@ mod tests {
         let mut fail=|_,_,_| Err(io::Error::other("model missing"));
         assert!(app.dispatch_neural(Command::GenerateTrack(TrackId::Synth2),&mut drums,&mut fail,&mut audio).is_err());
         assert_eq!(app.session().last_saved().unwrap().synth2().unwrap().content,pad);
+    }
+
+    #[test]
+    fn pad_key_and_aligned_pluck_are_published_and_rolled_back_together() {
+        struct Model {key:Key}
+        impl Synth1Generator for Model {
+            fn harmony_key(&self)->Option<Key>{Some(self.key)}
+            fn generate_synth1(&mut self,preset:SynthPreset,level:f32,_:RhythmContext)->io::Result<SynthTrack>{
+                let mut track=SynthTrack::demo(preset);
+                track.level=level;
+                if preset==SynthPreset::Pad {for n in &mut track.notes {n.pitch=self.key.snap(n.pitch as i32,48);}}
+                Ok(track)
+            }
+        }
+        let mut app=ApplicationController::new(8000,120.0).unwrap();
+        let mut audio=TestAudio::default();
+        let mut drums=|| -> io::Result<GeneratedPattern>{panic!("no drum regeneration")};
+        let mut model=Model{key:Key::new(2,false)};
+        assert!(app.dispatch_neural(Command::GenerateTrack(TrackId::Synth1),&mut drums,&mut model,&mut audio).is_err());
+        app.dispatch_neural(Command::GenerateTrack(TrackId::Synth2),&mut drums,&mut model,&mut audio).unwrap();
+        app.dispatch_neural(Command::GenerateTrack(TrackId::Synth1),&mut drums,&mut model,&mut audio).unwrap();
+        let saved=app.session().last_saved().unwrap();
+        assert_eq!(saved.pad_key(),model.key);
+        let before_pluck=saved.synth1().unwrap().content.clone();
+        let before_pad=saved.synth2().unwrap().content.clone();
+        assert!(before_pluck.notes.iter().all(|n|model.key.contains(n.pitch)));
+        audio.reject_queue=true;model.key=Key::new(8,true);
+        assert!(app.dispatch_neural(Command::GenerateTrack(TrackId::Synth2),&mut drums,&mut model,&mut audio).is_err());
+        let saved=app.session().last_saved().unwrap();
+        assert_eq!(saved.pad_key(),Key::new(2,false));
+        assert_eq!(saved.synth1().unwrap().content,before_pluck);
+        assert_eq!(saved.synth2().unwrap().content,before_pad);
+        audio.reject_queue=false;
+        app.dispatch_neural(Command::GenerateTrack(TrackId::Synth2),&mut drums,&mut model,&mut audio).unwrap();
+        let saved=app.session().last_saved().unwrap();
+        assert_eq!(saved.pad_key(),model.key);
+        assert!(saved.synth1().unwrap().content.notes.iter().all(|n|model.key.contains(n.pitch)));
+        let raw=saved.raw_pluck().unwrap();
+        assert_eq!(saved.synth1().unwrap().content.notes,harmonize(&raw.notes,&saved.synth2().unwrap().content.notes,model.key));
     }
 
     #[test]

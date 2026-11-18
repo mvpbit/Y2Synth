@@ -95,6 +95,7 @@
 <div class="hint">Drag around the ring with a mouse or finger · <kbd>Space</kbd> Play/Pause · <kbd>Enter</kbd> OK · <kbd>↑ ↓</kbd> rotate · <kbd>← →</kbd> Prev/Next · <kbd>Esc</kbd> back · <kbd>H</kbd> home</div>
 <div class="tag">480×360 is the exact UI grid in CSS pixels. Physical size on your monitor depends on DPI and browser zoom.</div>
 <div class="tag">Web Audio sound · Magenta neural generation · First use downloads models · Settings stay in memory.</div>
+<script src="neural-common.js"></script>
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
@@ -104,6 +105,7 @@ const state = {
   // Instrument roles are fixed: Pluck and Pad are separate named instruments.
   pluck:{level:0.67,notes:[]}, pad:{level:0.6,notes:[]},
   drums:{kick:[],snare:[],hat:[]},
+  padKey:null, rawPluck:[],
   message:"OK → settings · generate an instrument",
   fx:{delay:true, delaySteps:2, delayFeedback:.38, delayWet:.3,
       reverb:true, reverbSize:.65, reverbDamping:.42, reverbWet:.3},
@@ -287,6 +289,7 @@ function stopTransport(){
 let neuralWorker=null,neuralJob=null,neuralId=0;
 const trackRevision={pluck:0,pad:0,drums:0};
 const pendingPatterns={};
+let pendingPadKey=null;
 function resetNeuralWorker(){
   if(neuralWorker)neuralWorker.terminate();
   neuralWorker=null;
@@ -313,7 +316,7 @@ function requestNeuralPattern(track){
         neuralJob=null;resetNeuralWorker();reject(Error("Generation timed out; try again"));
       },180000);
       neuralJob={id,resolve,reject,timer};
-      neuralWorker.postMessage({id,track});
+      neuralWorker.postMessage({id,track,previousKey:pendingPadKey||state.padKey});
     }catch(error){
       if(neuralJob)clearTimeout(neuralJob.timer);
       neuralJob=null;resetNeuralWorker();reject(error);
@@ -331,17 +334,29 @@ function validPattern(track,pattern){
     Number.isInteger(note.len)&&note.len>0&&note.step+note.len<=16&&
     Number.isFinite(note.velocity)&&note.velocity>0&&note.velocity<=1);
 }
-function installPattern(track,pattern){
-  if(track==="drums")state.drums=pattern;else state[track].notes=pattern;
+function hasPad(){return state.pad.notes.length>0||!!pendingPatterns.pad;}
+function alignPluck(){
+  if(state.padKey&&state.rawPluck.length){
+    state.pluck.notes=NeuralPatterns.harmonizePluck(state.rawPluck,state.pad.notes,state.padKey);
+  }
+}
+function installPattern(track,pattern,key){
+  if(track==="drums")state.drums=pattern;
+  else if(track==="pad"){state.pad.notes=pattern;state.padKey=key;}
+  else state.rawPluck=pattern;
 }
 function applyPendingPatterns(){
-  let changed=false;
-  for(const track of Object.keys(pendingPatterns)){
-    installPattern(track,pendingPatterns[track]);delete pendingPatterns[track];changed=true;
+  const tracks=Object.keys(pendingPatterns);
+  if(!tracks.length)return;
+  for(const track of tracks){
+    installPattern(track,pendingPatterns[track],track==="pad"?pendingPadKey:null);
+    delete pendingPatterns[track];
   }
-  if(changed)render();
+  pendingPadKey=null;
+  alignPluck();render();
 }
 async function generateTrack(track){
+  if(track==="pluck"&&!hasPad()){inform("Generate PAD first to set the harmony");return false;}
   if(state.generating){inform("Generation already running");return false;}
   state.generating=true;
   const revision=++trackRevision[track];
@@ -350,9 +365,14 @@ async function generateTrack(track){
     const result=await requestNeuralPattern(track);
     if(trackRevision[track]!==revision)return false;
     if(!validPattern(track,result.pattern))throw Error("Invalid generated pattern");
-    if(state.playing)pendingPatterns[track]=result.pattern;
-    else installPattern(track,result.pattern);
-    inform(track.toUpperCase()+" · "+(result.chord?result.chord+" · ":"")+
+    if(track==="pad"&&!NeuralPatterns.validKey(result.key))throw Error("Invalid PAD key");
+    if(state.playing){
+      pendingPatterns[track]=result.pattern;
+      if(track==="pad")pendingPadKey=result.key;
+    }else{
+      installPattern(track,result.pattern,result.key);alignPluck();
+    }
+    inform(track.toUpperCase()+" · "+(track!=="drums"?NeuralPatterns.keyName(result.key||pendingPadKey||state.padKey)+" · ":"")+
       (state.playing?"queued for next bar":result.model));
     return true;
   }catch(error){
@@ -376,16 +396,16 @@ const choices={
     {label:"TEMPO",sub:state.bpm+" BPM",action:()=>go("tempo")},
   ],
   instruments:()=>[
-    {label:"PLUCK",sub:"AI-generated · MelodyRNN",action:()=>go("pluck")},
-    {label:"PAD",sub:"AI-generated · Multitrack MusicVAE",action:()=>go("pad")},
+    {label:"PLUCK",sub:"AI-generated · Follows PAD",action:()=>go("pluck")},
+    {label:"PAD",sub:"AI-generated · "+(state.padKey?NeuralPatterns.keyName(state.padKey):"Random key"),action:()=>go("pad")},
     {label:"DRUMS",sub:"AI-generated · DrumsRNN",action:()=>go("drums")},
   ],
   pluck:()=>[
-    {label:"GENERATE MELODY",sub:"AI-generated · MelodyRNN",disabled:state.generating,action:()=>{generateInstrument("pluck");render();}},
+    {label:"GENERATE MELODY",sub:"AI-generated · "+(hasPad()?"Follows PAD":"Generate PAD first"),disabled:state.generating||!hasPad(),action:()=>{generateInstrument("pluck");render();}},
     {label:"LEVEL",sub:"◀ / ▶ · Pluck level",value:format(state.pluck.level),key:"pluckLevel"},
   ],
   pad:()=>[
-    {label:"GENERATE CHORDS",sub:"AI-generated · Multitrack MusicVAE",disabled:state.generating,action:()=>{generateInstrument("pad");render();}},
+    {label:"GENERATE CHORDS",sub:"AI-generated · Random major / minor key",disabled:state.generating,action:()=>{generateInstrument("pad");render();}},
     {label:"LEVEL",sub:"◀ / ▶ · Pad level",value:format(state.pad.level),key:"padLevel"},
   ],
   drums:()=>[

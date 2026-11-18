@@ -3,21 +3,56 @@
  */
 (function(root){
   "use strict";
-  const SCALE=[0,2,3,5,7,8,10];
+  const NAMES=["C","Db","D","Eb","E","F","Gb","G","Ab","A","Bb","B"];
+  function validKey(key){return key&&Number.isInteger(key.root)&&key.root>=0&&key.root<12&&["major","minor"].includes(key.mode);}
+  function scaleFor(key){
+    if(!validKey(key))throw Error("Invalid PAD key");
+    return (key.mode==="minor"?[0,2,3,5,7,8,10]:[0,2,4,5,7,9,11]).map(n=>(n+key.root)%12);
+  }
+  function keyName(key){return NAMES[key.root]+" "+key.mode;}
+  function randomKey(previous){
+    const keys=Array.from({length:24},(_,i)=>({root:i%12,mode:i<12?"minor":"major"}))
+      .filter(k=>!previous||k.root!==previous.root||k.mode!==previous.mode);
+    return keys[Math.floor(Math.random()*keys.length)];
+  }
+  function chordFor(key){return NAMES[key.root]+(key.mode==="minor"?"m":"");}
   function pitchInRange(pitch,low,high){
     while(pitch<low)pitch+=12;
     while(pitch>high)pitch-=12;
     return pitch;
   }
-  function minorPitch(pitch){
-    let best=pitch;
-    for(let distance=0;distance<=2;distance++){
-      if(SCALE.includes((pitch-distance+120)%12)){best=pitch-distance;break;}
-      if(SCALE.includes((pitch+distance)%12)){best=pitch+distance;break;}
+  function nearestPitch(pitch,classes,low,high){
+    let best=null;
+    for(let candidate=low;candidate<=high;candidate++){
+      if(classes.includes(candidate%12)&&(best===null||Math.abs(candidate-pitch)<Math.abs(best-pitch)))best=candidate;
     }
+    if(best===null)throw Error("No playable harmony tones");
     return best;
   }
-  function normalize(sequence,track){
+  function harmonyAt(pad,step,key){
+    return [...new Set(pad.filter(n=>n.step<=step&&step<n.step+n.len).map(n=>n.pitch%12))]
+      .filter(pc=>scaleFor(key).includes(pc)).sort((a,b)=>a-b);
+  }
+  function harmonizePluck(notes,pad,key){
+    const scale=scaleFor(key),out=[];
+    for(const note of notes){
+      let start=note.step;
+      const stop=Math.min(16,note.step+note.len);
+      while(start<stop){
+        const tones=harmonyAt(pad,start,key);
+        let end=start+1;
+        while(end<stop&&harmonyAt(pad,end,key).join(",")===tones.join(","))end++;
+        // Strong beats and held notes use the sounding PAD tones.
+        // Short off-beat passing notes may use other tones of the shared key.
+        const allowed=tones.length&&(start%4===0||end-start>1)?tones:scale;
+        const pitch=nearestPitch(pitchInRange(note.pitch,55,84),allowed,55,84);
+        out.push({...note,step:start,len:end-start,pitch});
+        start=end;
+      }
+    }
+    return out;
+  }
+  function normalize(sequence,track,key){
     if(!sequence||!Array.isArray(sequence.notes))throw Error("Invalid model output");
     const resolution=sequence.quantizationInfo?.stepsPerQuarter;
     if(!Number.isFinite(resolution)||resolution<=0)throw Error("Invalid model timing");
@@ -29,7 +64,8 @@
          !Number.isFinite(start)||!Number.isFinite(end)||start<0||end<=start)continue;
       const step=Math.round(start*ratio),stop=Math.min(16,Math.round(end*ratio));
       if(step<0||step>=16||stop<=step)continue;
-      const pitch=pitchInRange(minorPitch(note.pitch),track==="pad"?48:55,track==="pad"?84:84);
+      const folded=pitchInRange(note.pitch,track==="pad"?48:55,84);
+      const pitch=track==="pad"?nearestPitch(folded,scaleFor(key),48,84):folded;
       const velocity=Number.isFinite(note.velocity)&&note.velocity>0?
         Math.max(.2,Math.min(1,note.velocity/127)):.75;
       notes.push({step,pitch,len:stop-step,velocity,instrument:note.instrument??0});
@@ -44,8 +80,8 @@
     }
     return {maximum,overlap};
   }
-  function instrumentNotes(sequence,track){
-    let notes=normalize(sequence,track);
+  function instrumentNotes(sequence,track,key={root:0,mode:"minor"}){
+    let notes=normalize(sequence,track,key);
     if(track==="pad"){
       const groups=new Map();
       for(const note of notes){
@@ -94,5 +130,5 @@
     if(!Object.values(result).some(hits=>hits.length))throw Error("Model returned silence; try again");
     return result;
   }
-  root.NeuralPatterns={instrumentNotes,drumNotes,polyphony};
+  root.NeuralPatterns={instrumentNotes,drumNotes,polyphony,validKey,scaleFor,keyName,randomKey,chordFor,harmonizePluck,harmonyAt};
 })(typeof self!=="undefined"?self:globalThis);
