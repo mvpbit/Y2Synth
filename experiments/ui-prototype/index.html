@@ -406,7 +406,7 @@ const choices={
     {label:"LEVEL",sub:"◀ / ▶ · Pad level",value:format(state.pad.level),key:"padLevel"},
   ],
   drums:()=>[
-    {label:"GENERATE RHYTHM",sub:"AI-generated · DrumsRNN",disabled:state.generating,action:()=>{generateDrums();render();}},
+    {label:"GENERATE DRUMS",disabled:state.generating,action:()=>{generateDrums();render();}},
   ],
   tempo:()=>[{label:"BPM",sub:"◀ / ▶ adjusts by 2 BPM",value:state.bpm,key:"bpm"}],
   fx:()=>[

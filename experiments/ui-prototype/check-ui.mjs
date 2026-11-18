@@ -102,7 +102,7 @@ assertRuntime(!homeMarkup.includes("data-step")&&!homeMarkup.includes("seq-row")
 assertRuntime(choices.settings().map(row=>row.label).join(",")==="DRUMS,PAD,PLUCK,FX,TEMPO","Settings must expose the five destinations in order");
 assertRuntime(!choices.instruments,"No intermediate instrument submenu");
 for(const instrument of ["pluck","pad","drums"]){
-  assertRuntime(choices[instrument]()[0].sub.startsWith("AI-generated"),"Instrument must be AI-generated");
+  if(instrument!=="drums")assertRuntime(choices[instrument]()[0].sub.startsWith("AI-generated"),"Instrument must be AI-generated");
   assertRuntime(choices[instrument]().every(row=>row.label.startsWith("GENERATE")||row.label==="LEVEL"),"No manual notes/demo controls");
 }
 assertRuntime(choices.fx().map(row=>row.key).join(",")==="delay,delaySteps,delayFeedback,delayWet,reverb,reverbSize,reverbDamping,reverbWet","FX controls must stay intact");
