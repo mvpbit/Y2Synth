@@ -1,0 +1,25 @@
+name: Rust and neural model checks
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'experiments/drumsrnn/**'
+      - '.github/workflows/rust-models.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install audio build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Test Rust including live audio compilation
+        run: cargo test --release --locked --manifest-path experiments/drumsrnn/rust/Cargo.toml --features live-audio
+      - name: Download and inspect official MelodyRNN checkpoint
+        run: |
+          bash experiments/drumsrnn/download-model.sh melody_rnn
+          cat experiments/drumsrnn/models/melody_rnn_tfjs/config.json
+          cat experiments/drumsrnn/models/melody_rnn_tfjs/weights_manifest.json

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fetch Google's Magenta.js-converted DrumsRNN checkpoint with normal TLS verification.
+# Fetch an official Magenta.js MusicRNN checkpoint with normal TLS verification.
 # The legacy .mag host currently presents a mismatched TLS certificate.
 set -euo pipefail
 
@@ -8,8 +8,13 @@ command -v python3 >/dev/null || { echo "Error: python3 is required" >&2; exit 1
 command -v shasum >/dev/null || { echo "Error: shasum is required" >&2; exit 1; }
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-model_dir="$script_dir/models/drum_kit_rnn_tfjs"
-base_url="https://storage.googleapis.com/magentadata/js/checkpoints/music_rnn/drum_kit_rnn"
+model_name="${1:-drum_kit_rnn}"
+case "$model_name" in
+  drum_kit_rnn|melody_rnn) ;;
+  *) echo "Usage: $0 [drum_kit_rnn|melody_rnn]" >&2; exit 1 ;;
+esac
+model_dir="$script_dir/models/${model_name}_tfjs"
+base_url="https://storage.googleapis.com/magentadata/js/checkpoints/music_rnn/$model_name"
 
 mkdir -p "$model_dir"
 
