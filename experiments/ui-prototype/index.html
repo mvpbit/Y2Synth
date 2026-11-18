@@ -331,7 +331,8 @@ function requestNeuralPattern(track){
 function validPattern(track,pattern){
   if(track==="drums"){
     return pattern&&["kick","snare","hat"].every(key=>Array.isArray(pattern[key])&&
-      pattern[key].every(step=>Number.isInteger(step)&&step>=0&&step<16));
+      pattern[key].every(step=>Number.isInteger(step)&&step>=0&&step<16))&&
+      ["kick","snare","hat"].some(key=>pattern[key].length>0);
   }
   return Array.isArray(pattern)&&pattern.length>0&&pattern.length<=48&&pattern.every(note=>
     Number.isInteger(note.step)&&note.step>=0&&note.step<16&&
@@ -359,6 +360,41 @@ function applyPendingPatterns(){
   }
   pendingPadKey=null;
   alignPluck();render();
+}
+async function generateAll(){
+  if(state.generating){inform("Generation already running");return false;}
+  state.generating=true;
+  const revisions={};
+  for(const track of ["pad","pluck","drums"])revisions[track]=++trackRevision[track];
+  const results={};
+  inform("Generating all instruments…");render();
+  try{
+    // Stage every model result privately. No partial replacement of music.
+    for(const track of ["pad","pluck","drums"]){
+      const result=await requestNeuralPattern(track);
+      if(!validPattern(track,result.pattern))throw Error("Invalid "+track.toUpperCase()+" pattern");
+      if(track==="pad"&&!NeuralPatterns.validKey(result.key))throw Error("Invalid PAD key");
+      results[track]=result;
+    }
+    if(Object.keys(revisions).some(track=>trackRevision[track]!==revisions[track]))return false;
+    const key=results.pad.key;
+    const aligned=NeuralPatterns.harmonizePluck(results.pluck.pattern,results.pad.pattern,key);
+    if(!validPattern("pluck",aligned))throw Error("Invalid aligned PLUCK pattern");
+    if(state.playing){
+      for(const track of ["pad","pluck","drums"])pendingPatterns[track]=results[track].pattern;
+      pendingPadKey=key;
+    }else{
+      // Supersede any older queue with this complete successful transaction.
+      for(const track of Object.keys(pendingPatterns))delete pendingPatterns[track];
+      pendingPadKey=null;
+      for(const track of ["pad","pluck","drums"])installPattern(track,results[track].pattern,key);
+      state.pluck.notes=aligned;
+    }
+    inform("ALL · "+NeuralPatterns.keyName(key)+" · "+(state.playing?"queued for next bar":"ready to play"));
+    return true;
+  }catch(error){
+    inform("AI: "+error.message);return false;
+  }finally{state.generating=false;render();}
 }
 async function generateTrack(track){
   if(track==="pluck"&&!hasPad()){inform("Generate PAD first to set the harmony");return false;}
@@ -396,6 +432,7 @@ function back(){
 function home(){state.page="home";state.stack=[];state.focus=0;state.editing=false;render();}
 const choices={
   settings:()=>[
+    {label:"GENERATE ALL",disabled:state.generating,action:()=>{generateAll();}},
     {label:"DRUMS",action:()=>go("drums")},
     {label:"PAD",action:()=>go("pad")},
     {label:"PLUCK",action:()=>go("pluck")},

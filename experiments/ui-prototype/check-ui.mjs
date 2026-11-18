@@ -99,17 +99,17 @@ assertRuntime(!state.playing&&audio.ctx===null,"Empty PLAY must not start audio"
 const homeMarkup=renderHome();
 assertRuntime((homeMarkup.match(/<button/g)||[]).length===1&&homeMarkup.includes("data-transport"),"HOME must contain only the transport button");
 assertRuntime(!homeMarkup.includes("data-step")&&!homeMarkup.includes("seq-row"),"HOME must not render a note grid");
-assertRuntime(choices.settings().map(row=>row.label).join(",")==="DRUMS,PAD,PLUCK,FX,TEMPO","Settings must expose the five destinations in order");
+assertRuntime(choices.settings().map(row=>row.label).join(",")==="GENERATE ALL,DRUMS,PAD,PLUCK,FX,TEMPO","Settings must expose Generate All first and the five destinations");
 assertRuntime(!choices.instruments,"No intermediate instrument submenu");
 for(const instrument of ["pluck","pad","drums"]){
   assertRuntime(choices[instrument]().every(row=>row.label.startsWith("GENERATE")||row.label==="LEVEL"),"No manual notes/demo controls");
 }
 assertRuntime(choices.fx().map(row=>row.key).join(",")==="delay,delaySteps,delayFeedback,delayWet,reverb,reverbSize,reverbDamping,reverbWet","FX controls must stay intact");
-activate();activate(2);
+activate();activate(3);
 assertRuntime(state.page==="pluck","OK navigation must reach PLUCK");
 back();assertRuntime(state.page==="settings","BACK must return directly to settings");
 for(const [index,page] of ["drums","pad","pluck","fx","tempo"].entries()){
-  activate(index);assertRuntime(state.page===page,"Direct settings destination: "+page);
+  activate(index+1);assertRuntime(state.page===page,"Direct settings destination: "+page);
   back();assertRuntime(state.page==="settings","Direct BACK from "+page);
 }
 home();
@@ -238,10 +238,10 @@ audio.drums=null;state.drumsLevel=1;
 home();
 wheelTurn(1);
 if (state.page !== "settings" || state.focus !== 0) throw new Error("Home wheel navigation");
-wheelTurn(3);
-if (state.focus !== 3) throw new Error("Clockwise scroll should select FX");
+wheelTurn(4);
+if (state.focus !== 4) throw new Error("Clockwise scroll should select FX");
 wheelTurn(-1);
-if (state.focus !== 2) throw new Error("Anticlockwise scroll should select PLUCK");
+if (state.focus !== 3) throw new Error("Anticlockwise scroll should select PLUCK");
 go("tempo");
 if (state.editing) throw new Error("New page must exit edit mode");
 activate();
@@ -275,7 +275,49 @@ stopTransport();
 if (state.playing || state.paused || state.playhead !== 0 || audio.step !== 0) {
   throw new Error("Long-press STOP must reset playhead and transport");
 }
-`+"\n})()", { document, window: {}, Worker: class { postMessage() {} terminate() {} }, setTimeout() {}, clearTimeout() {}, clearInterval() {} });
+
+// Generate All is one transaction, including at startup without an existing PAD.
+state.pad.notes=[];state.pluck.notes=[];state.rawPluck=[];state.padKey=null;
+state.drums={kick:[],snare:[],hat:[]};
+const allPad=[{step:0,pitch:62,len:16,velocity:.7},{step:0,pitch:66,len:16,velocity:.7},{step:0,pitch:69,len:16,velocity:.7}];
+const allMelody=[{step:0,pitch:61,len:16,velocity:.8}];
+const allDrums={kick:[0,8],snare:[4,12],hat:[2,6,10,14]};
+function musicSnapshot(){return JSON.stringify({pad:state.pad.notes,pluck:state.pluck.notes,raw:state.rawPluck,key:state.padKey,drums:state.drums});}
+async function answerAll(track,pattern,key){
+  assertRuntime(neuralWorker.lastRequest.track===track,"Generate All model order: "+track);
+  neuralWorker.onmessage({data:{id:neuralJob.id,pattern,key,model:track}});
+  await Promise.resolve();
+}
+let whole=generateAll();
+assertRuntime(state.generating&&choices.settings()[0].disabled,"Generate All must lock the UI");
+assertRuntime(await generateAll()===false,"Concurrent Generate All must be rejected");
+assertRuntime(await generateDrums()===false,"Single-track generation must not interleave");
+await answerAll("pad",allPad,{root:2,mode:"major"});
+assertRuntime(!hasMusic(),"PAD must not publish a partial startup result");
+await answerAll("pluck",allMelody);
+assertRuntime(!hasMusic(),"PLUCK must not publish before DRUMS succeeds");
+await answerAll("drums",allDrums);
+assertRuntime(await whole&&!state.generating&&hasMusic(),"Generate All startup failed");
+assertRuntime(state.padKey.root===2&&state.pluck.notes[0].pitch%12===2,"All PLUCK must follow the new PAD");
+assertRuntime(!state.playing,"Generate All must not start transport");
+const savedAll=musicSnapshot();
+const savedLevels=JSON.stringify([state.drumsLevel,state.pluck.level,state.pad.level,state.fx]);
+whole=generateAll();
+await answerAll("pad",samplePad,{root:0,mode:"minor"});
+await answerAll("pluck",allMelody);
+neuralWorker.onmessage({data:{id:neuralJob.id,error:"Drum model unavailable"}});
+assertRuntime(await whole===false&&musicSnapshot()===savedAll,"Last-stage failure must preserve the entire previous composition");
+state.playing=true;
+whole=generateAll();
+await answerAll("pad",samplePad,{root:0,mode:"minor"});
+await answerAll("pluck",allMelody);
+await answerAll("drums",{kick:[1],snare:[5],hat:[3]});
+assertRuntime(await whole&&musicSnapshot()===savedAll,"All tracks must wait for the bar boundary");
+applyPendingPatterns();
+assertRuntime(state.padKey.root===0&&state.pluck.notes[0].pitch%12===0&&state.drums.kick[0]===1,"All tracks must switch together");
+assertRuntime(JSON.stringify([state.drumsLevel,state.pluck.level,state.pad.level,state.fx])===savedLevels,"Generate All must preserve levels and FX");
+state.playing=false;
+`+"\n})()", { document, window: {}, Worker: class { postMessage(message) {this.lastRequest=message;} terminate() {} }, setTimeout() {}, clearTimeout() {}, clearInterval() {} });
 
 // Real adapters are tested with polyphonic output at the model's 24 steps/beat.
 const sandbox={};
