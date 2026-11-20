@@ -90,6 +90,26 @@ int main(int argc, char** argv) {
       state_error=std::max(state_error,double(std::abs(h[j]-expected_state[j])));
       state_error=std::max(state_error,double(std::abs(c[j]-expected_state[j+state_size])));
     }
+    // Diagnostic only: eliminate accumulated recurrent-state drift by restoring
+    // the x86 state before EVERY step. Keep the original acceptance gate.
+    const auto input_states=read_binary<float>(dir+"/input-states.f32",size_t(steps)*2*state_size);
+    double reset_probability_error=0;
+    int reset_argmax_matches=0;
+    for(int i=0;i<steps;++i) {
+      const float* state=input_states.data()+size_t(i)*2*state_size;
+      std::copy_n(state,state_size,h.begin());
+      std::copy_n(state+state_size,state_size,c.begin());
+      const auto actual=infer(tokens[i]);
+      const float* reference=expected.data()+size_t(i)*width;
+      const auto best=std::max_element(actual.begin(),actual.end())-actual.begin();
+      const auto ref_best=std::max_element(reference,reference+width)-reference;
+      reset_argmax_matches+=best==ref_best;
+      double asum=0,rsum=0;
+      for(int j=0;j<width;++j){asum+=std::exp(actual[j]-actual[best]);rsum+=std::exp(reference[j]-reference[ref_best]);}
+      for(int j=0;j<width;++j)
+        reset_probability_error=std::max(reset_probability_error,
+          std::abs(std::exp(actual[j]-actual[best])/asum-std::exp(reference[j]-reference[ref_best])/rsum));
+    }
     // A second trajectory is sampled entirely by the ARM process.
     std::fill(h.begin(),h.end(),0); std::fill(c.begin(),c.end(),0);
     std::mt19937 random(20261121);
@@ -122,6 +142,8 @@ int main(int argc, char** argv) {
       <<",\n  \"max_logit_error\":"<<max_logit_error
       <<",\n  \"max_probability_error\":"<<max_probability_error
       <<",\n  \"max_state_error\":"<<state_error
+      <<",\n  \"reset_state_max_probability_error\":"<<reset_probability_error
+      <<",\n  \"reset_state_argmax_matches\":"<<reset_argmax_matches
       <<",\n  \"emulated_elapsed_seconds\":"<<elapsed
       <<",\n  \"emulated_process_maxrss_kib\":"<<usage.ru_maxrss
       <<",\n  \"reference_check_passed\":"<<(matches?"true":"false")

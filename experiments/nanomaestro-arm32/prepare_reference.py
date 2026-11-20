@@ -69,7 +69,7 @@ visit(model.graph)
 settings = ort.SessionOptions()
 settings.intra_op_num_threads = 1
 settings.inter_op_num_threads = 1
-# Match the reduced ARM runtime's explicit graph; do not add fused operators.
+# Match the ARM runtime's explicit graph; do not add fused operators.
 settings.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
 session = ort.InferenceSession(str(MODEL_DIR / "model.onnx"), settings,
                                providers=["CPUExecutionProvider"])
@@ -85,7 +85,7 @@ prompt = [stoi[x] for x in ["BOS", "BPM_120", "GRID_64", "BAR", "POS_0"]]
 h = np.zeros((layers, 1, hidden), dtype=np.float32)
 c = np.zeros_like(h)
 rng = np.random.default_rng(20261121)
-tokens, expected, latency = [], [], []
+tokens, expected, latency, input_states = [], [], [], []
 current = prompt[0]
 generated = []
 
@@ -103,6 +103,7 @@ def sample(logits):
 # floating-point rounding would cause different stochastic choices.
 for i in range(256):
     tokens.append(current)
+    input_states.append(np.concatenate([h.reshape(-1), c.reshape(-1)]).astype('<f4'))
     started = time.perf_counter()
     logits, h, c = session.run(["logits", "h_out", "c_out"],
         {"input": np.array([[current]], dtype=np.int64), "h": h, "c": c})
@@ -118,6 +119,7 @@ assert width == len(itos)
     f"{len(tokens)} {width} {layers} {hidden} {stoi.get('EOS', -1)}\n" +
     " ".join(map(str, tokens)) + "\n")
 np.stack(expected).tofile(OUT / "expected-logits.f32")
+np.stack(input_states).tofile(OUT / "input-states.f32")
 np.concatenate([h.reshape(-1), c.reshape(-1)]).astype("<f4").tofile(OUT / "expected-state.f32")
 (OUT / "x86-events.txt").write_text(" ".join(generated))
 manifest = {

@@ -59,3 +59,16 @@ passed using PyPI 1.23.2, but source compilation could not start. The current
 workflow uses signed Debian trixie packages for both x86 and armhf instead.
 This tests the distribution's full runtime, not our initially proposed reduced
 source build. Exact installed versions are included in the artifact.
+
+## Initial result and diagnostic
+
+[Run 44810282336](https://github.com/mvpbit/Y2Synth/actions/runs/44810282336)
+executed all 256 reference steps and 512 independently sampled steps on emulated
+Cortex-A7 with ONNX Runtime 1.21.0. The numerical gate **failed**: maximum
+probability error 0.0697142 exceeds 0.02, although 255/256 argmax choices matched.
+Successful instruction execution does not establish numerical equivalence.
+
+An additional diagnostic now restores the x86 hidden/cell state before each of
+256 steps, to separate one-step backend differences from accumulated recurrent
+drift. It does not relax the original gate. Emulated elapsed time now includes
+this extra diagnostic and is not comparable to the initial run's duration.
