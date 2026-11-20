@@ -1,5 +1,10 @@
 # NanoMaestro Light: ARM32 feasibility evidence — 21 November 2026
 
+> Historical ARM32 experiment. Later on the same date, the user authorized
+> browser integration; NanoMaestro FLOW is now published on Pages.
+> See [DEVELOPMENT](../DEVELOPMENT.md) for the separate browser validation.
+> The hardware limitations below still apply.
+
 ## Decision
 
 **Keep NanoMaestro Light as a candidate for a small, continuously stateful note generator.**
