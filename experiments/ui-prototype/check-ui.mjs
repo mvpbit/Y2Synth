@@ -317,6 +317,13 @@ applyPendingPatterns();
 assertRuntime(state.padKey.root===0&&state.pluck.notes[0].pitch%12===0&&state.drums.kick[0]===1,"All tracks must switch together");
 assertRuntime(JSON.stringify([state.drumsLevel,state.pluck.level,state.pad.level,state.fx])===savedLevels,"Generate All must preserve levels and FX");
 state.playing=false;
+// STOP must invalidate an asynchronous AudioContext resume.
+let finishResume;
+audio.ctx={currentTime:0,resume:()=>new Promise(resolve=>{finishResume=resolve;})};
+const resumePending=transport();
+stopTransport();finishResume();await resumePending;
+assertRuntime(!state.playing&&audio.timer===null,"Delayed audio resume must not undo STOP");
+audio.ctx=null;
 // FLOW scheduling preserves loop snapshots and waits at a bar boundary on underrun.
 const savedFlowMusic=musicSnapshot(),savedFlowFx=JSON.stringify(state.fx);
 const played=[];

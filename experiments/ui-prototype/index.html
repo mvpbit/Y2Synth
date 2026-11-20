@@ -128,7 +128,7 @@ function startVoice(source,time,end){
 }
 function stopVoices(){
   for(const source of audio.voices){try{source.stop();}catch{}}
-  audio.voices.clear();audio.generation++;
+  audio.voices.clear();audio.generation++;audio.starting=false;
 }
 function tone(freq,time,duration,gain,type="sine",peakDelay=.01,target=null){
   const ctx=audio.ctx;
@@ -149,7 +149,7 @@ function noise(time,duration,gain,cutoff,kind,target=null){
   source.connect(filter).connect(env).connect(target||audio.mix);
   startVoice(source,time,time+duration+.01);
 }
-const audio={ctx:null, timer:null, nextTime:0, step:0, mix:null, drums:null, voices:new Set(), generation:0,
+const audio={ctx:null, timer:null, nextTime:0, step:0, mix:null, drums:null, voices:new Set(), generation:0, starting:false,
             delay:null,feedback:null,delayWet:null,convolver:null,reverbWet:null,analyser:null,noise:null};
 function makeImpulse(ctx,size,damping){
   const length=Math.floor(ctx.sampleRate*(.5+size*2.6));
@@ -321,6 +321,7 @@ function hasMusic(){
   return (flow.enabled&&flow.ready)||state.pluck.notes.length>0||state.pad.notes.length>0||Object.values(state.drums).some(steps=>steps.length>0);
 }
 async function transport(){
+  if(audio.starting)return;
   if(flowStarting){inform("FLOW · loading; select FLOW again to cancel");return;}
   if(!state.playing&&!hasMusic()){
     inform("OK → settings · generate an instrument");return;
@@ -331,8 +332,11 @@ async function transport(){
     clearInterval(audio.timer);audio.timer=null;stopVoices();
     inform("PAUSE · press ▶Ⅱ to resume");
   }else{
+    const generation=audio.generation;audio.starting=true;
     try{initAudio();await audio.ctx.resume();}
-    catch(error){inform("Audio: "+error.message);return;}
+    catch(error){if(generation===audio.generation)inform("Audio: "+error.message);return;}
+    finally{if(generation===audio.generation)audio.starting=false;}
+    if(generation!==audio.generation)return;
     if(!state.paused)audio.step=0;
     state.playing=true;state.paused=false;
     audio.nextTime=audio.ctx.currentTime+.065;
