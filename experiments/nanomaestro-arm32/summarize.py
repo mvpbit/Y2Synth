@@ -10,7 +10,7 @@ lines = ["# NanoMaestro Light ARM32 feasibility probe", "",
     "This run tests Linux ARMv7/Cortex-A7 instructions under QEMU, not an Innioasis Y2.",
     "No hardware speed, peak RAM, battery life, audio quality or realtime result is implied.", "",
     "Model revision: `"+manifest["revision"]+"`.",
-    "Runtime: ONNX Runtime 1.23.2, CPU, one thread, graph optimizations disabled.",
+    "Reference runtime: ONNX Runtime "+manifest["reference"]["runtime"]+", CPU, one thread, graph optimizations disabled.",
     "", "## Model", "```json", json.dumps(manifest,indent=2), "```"]
 if report:
     lines += ["", "## ARM32 functional result", "```json", json.dumps(report,indent=2), "```"]

@@ -18,57 +18,50 @@ concurrency:
 jobs:
   probe:
     runs-on: ubuntu-22.04
-    timeout-minutes: 60
+    container: debian:trixie-slim
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    env:
+      OMP_NUM_THREADS: '1'
+      OPENBLAS_NUM_THREADS: '1'
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-      - name: Install reference and cross compiler
+      - name: Install Debian CPU reference and ARM32 runtime
         run: |
-          python -m pip install numpy==1.26.4 onnx==1.19.1 onnxruntime==1.23.2 cmake==3.31.6 ninja
-          sudo apt-get update
-          sudo apt-get install -y g++-arm-linux-gnueabihf qemu-user time
+          dpkg --add-architecture armhf
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates \
+            python3 python3-numpy python3-onnx python3-onnxruntime \
+            g++-arm-linux-gnueabihf libonnxruntime-dev:armhf qemu-user file
+          mkdir -p nano-results
+          dpkg-query -W > nano-results/debian-packages.txt
       - name: Inspect pinned model and run x86 oracle
-        run: python experiments/nanomaestro-arm32/prepare_reference.py
-      - name: Fetch ONNX Runtime release sources
-        run: |
-          curl --fail --location --retry 3 https://codeload.github.com/microsoft/onnxruntime/tar.gz/refs/tags/v1.23.2 -o ort-source.tar.gz
-          mkdir ort-src
-          tar -xzf ort-source.tar.gz --strip-components=1 -C ort-src
-          sha256sum ort-source.tar.gz > nano-results/runtime-source-sha256.txt
-      - name: Cross compile required CPU kernels for Cortex-A7
+        run: python3 experiments/nanomaestro-arm32/prepare_reference.py
+      - name: Build standalone Cortex-A7 probe
         run: |
           set -o pipefail
-          python ort-src/tools/ci_build/build.py --build_dir "$GITHUB_WORKSPACE/ort-build" \
-            --config Release --update --build --build_shared_lib --skip_tests --skip_submodule_sync \
-            --parallel 2 --cmake_generator Ninja --compile_no_warning_as_error \
-            --include_ops_by_config "$GITHUB_WORKSPACE/nano-results/required_ops.config" \
-            --cmake_extra_defines \
-              CMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/experiments/nanomaestro-arm32/arm32.cmake" \
-              onnxruntime_BUILD_UNIT_TESTS=OFF \
-            2>&1 | tee nano-results/arm32-build.log
-      - name: Build standalone ARM32 probe
-        run: |
           arm-linux-gnueabihf-g++ -std=c++17 -O2 -mcpu=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard \
             experiments/nanomaestro-arm32/probe.cpp \
-            -I ort-src/include/onnxruntime/core/session -L ort-build/Release \
-            -lonnxruntime -Wl,-rpath,'$ORIGIN' -o nano-results/nanomaestro-arm32
+            -I /usr/include/onnxruntime \
+            -L /usr/lib/arm-linux-gnueabihf -lonnxruntime \
+            -o nano-results/nanomaestro-arm32 2>&1 | tee nano-results/arm32-build.log
           file nano-results/nanomaestro-arm32 > nano-results/elf.txt
           arm-linux-gnueabihf-readelf -A nano-results/nanomaestro-arm32 >> nano-results/elf.txt
           arm-linux-gnueabihf-readelf --version-info nano-results/nanomaestro-arm32 > nano-results/abi.txt
       - name: Execute Cortex-A7 oracle and stateful generation
         run: |
           set -o pipefail
-          timeout 300 qemu-arm -cpu cortex-a7 -L /usr/arm-linux-gnueabihf \
-            -E LD_LIBRARY_PATH="$GITHUB_WORKSPACE/ort-build/Release" \
+          timeout 600 qemu-arm -cpu cortex-a7 -L /usr/arm-linux-gnueabihf \
+            -E LD_LIBRARY_PATH=/usr/lib/arm-linux-gnueabihf \
             nano-results/nanomaestro-arm32 nano-model/model.onnx nano-results \
             2>&1 | tee nano-results/arm32-run.log
       - name: Summarize evidence
         if: always()
         run: |
           if test -f nano-results/manifest.json; then
-            python experiments/nanomaestro-arm32/summarize.py
+            python3 experiments/nanomaestro-arm32/summarize.py
           fi
       - name: Upload reports only (no model weights)
         if: always()
