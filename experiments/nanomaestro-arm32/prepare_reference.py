@@ -28,7 +28,7 @@ def get(url):
 
 
 info = json.loads(get("https://huggingface.co/api/models/" + REPO))
-revision = info["sha"]
+revision = "9a64dd24b3a550a6101f868af71bdc9960376e26"
 files = {}
 for remote, local in [
     ("NanoMaestro-Light/model_int8.onnx", "model.onnx"),
@@ -37,7 +37,13 @@ for remote, local in [
     url = "https://huggingface.co/" + REPO + "/resolve/" + revision + "/" + urllib.parse.quote(remote)
     data = get(url)
     (MODEL_DIR / local).write_bytes(data)
-    files[remote] = {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+    checksum = hashlib.sha256(data).hexdigest()
+    expected_hash = {
+        "model.onnx": "1d8f054bd04bf63d2d0514e6773d5a293c8034b7488684daeb44311efa96a87c",
+        "vocab.json": "51a3142aa391e9d588e866a87657a792e72f03a0cbc63ad5057760d38e7c67b3",
+    }[local]
+    assert checksum == expected_hash, "Model fixture checksum changed"
+    files[remote] = {"bytes": len(data), "sha256": checksum}
 model = onnx.load(str(MODEL_DIR / "model.onnx"))
 onnx.checker.check_model(model)
 assert not any(t.data_location == onnx.TensorProto.EXTERNAL for t in model.graph.initializer)

@@ -33,13 +33,15 @@ jobs:
         run: python experiments/nanomaestro-arm32/prepare_reference.py
       - name: Fetch ONNX Runtime release sources
         run: |
-          git clone --branch v1.23.2 --depth 1 --recursive https://github.com/microsoft/onnxruntime.git ort-src
-          git -C ort-src rev-parse HEAD > nano-results/runtime-revision.txt
+          curl --fail --location --retry 3 https://codeload.github.com/microsoft/onnxruntime/tar.gz/refs/tags/v1.23.2 -o ort-source.tar.gz
+          mkdir ort-src
+          tar -xzf ort-source.tar.gz --strip-components=1 -C ort-src
+          sha256sum ort-source.tar.gz > nano-results/runtime-source-sha256.txt
       - name: Cross compile required CPU kernels for Cortex-A7
         run: |
           set -o pipefail
           python ort-src/tools/ci_build/build.py --build_dir "$GITHUB_WORKSPACE/ort-build" \
-            --config Release --update --build --build_shared_lib --skip_tests \
+            --config Release --update --build --build_shared_lib --skip_tests --skip_submodule_sync \
             --parallel 2 --cmake_generator Ninja --compile_no_warning_as_error \
             --include_ops_by_config "$GITHUB_WORKSPACE/nano-results/required_ops.config" \
             --cmake_extra_defines \
