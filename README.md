@@ -84,3 +84,8 @@ quit
 - [Magenta DrumsRNN research](docs/research/magenta-drumsrnn.md) — верификация численного инференса.
 
 **Ветка разработки — `main`.** Веса, локальные аудио и артефакты сборки не коммитить.
+
+
+### Исследование непрерывной генерации — 21 ноября 2026
+
+[Изолированная ARM32-проверка NanoMaestro Light](experiments/nanomaestro-arm32/README.md) выполняется через GitHub Actions. Не подключена к основному синту или Pages; QEMU не заменяет аппаратные замеры Y2. FLOW пока не опубликован.

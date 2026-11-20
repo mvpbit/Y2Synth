@@ -1,0 +1,82 @@
+name: NanoMaestro Light ARM32 feasibility
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'experiments/nanomaestro-arm32/**'
+      - '.github/workflows/nanomaestro-arm32.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nanomaestro-arm32
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install reference and cross compiler
+        run: |
+          python -m pip install numpy==1.26.4 onnx==1.19.1 onnxruntime==1.23.2 cmake==3.31.6 ninja
+          sudo apt-get update
+          sudo apt-get install -y g++-arm-linux-gnueabihf qemu-user time
+      - name: Inspect pinned model and run x86 oracle
+        run: python experiments/nanomaestro-arm32/inspect.py
+      - name: Fetch ONNX Runtime release sources
+        run: |
+          git clone --branch v1.23.2 --depth 1 --recursive https://github.com/microsoft/onnxruntime.git ort-src
+          git -C ort-src rev-parse HEAD > nano-results/runtime-revision.txt
+      - name: Cross compile required CPU kernels for Cortex-A7
+        run: |
+          set -o pipefail
+          python ort-src/tools/ci_build/build.py --build_dir "$GITHUB_WORKSPACE/ort-build" \
+            --config Release --update --build --build_shared_lib --skip_tests \
+            --parallel 2 --cmake_generator Ninja --compile_no_warning_as_error \
+            --include_ops_by_config "$GITHUB_WORKSPACE/nano-results/required_ops.config" \
+            --cmake_extra_defines \
+              CMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/experiments/nanomaestro-arm32/arm32.cmake" \
+              onnxruntime_BUILD_UNIT_TESTS=OFF \
+            2>&1 | tee nano-results/arm32-build.log
+      - name: Build standalone ARM32 probe
+        run: |
+          arm-linux-gnueabihf-g++ -std=c++17 -O2 -mcpu=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard \
+            experiments/nanomaestro-arm32/probe.cpp \
+            -I ort-src/include/onnxruntime/core/session -L ort-build/Release \
+            -lonnxruntime -Wl,-rpath,'$ORIGIN' -o nano-results/nanomaestro-arm32
+          file nano-results/nanomaestro-arm32 > nano-results/elf.txt
+          arm-linux-gnueabihf-readelf -A nano-results/nanomaestro-arm32 >> nano-results/elf.txt
+          arm-linux-gnueabihf-readelf --version-info nano-results/nanomaestro-arm32 > nano-results/abi.txt
+      - name: Execute Cortex-A7 oracle and stateful generation
+        run: |
+          set -o pipefail
+          timeout 300 qemu-arm -cpu cortex-a7 -L /usr/arm-linux-gnueabihf \
+            -E LD_LIBRARY_PATH="$GITHUB_WORKSPACE/ort-build/Release" \
+            nano-results/nanomaestro-arm32 nano-model/model.onnx nano-results \
+            2>&1 | tee nano-results/arm32-run.log
+      - name: Summarize evidence
+        if: always()
+        run: |
+          if test -f nano-results/manifest.json; then
+            python experiments/nanomaestro-arm32/summarize.py
+          fi
+      - name: Upload reports only (no model weights)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nanomaestro-arm32-evidence
+          path: |
+            nano-results/*.json
+            nano-results/*.md
+            nano-results/*.txt
+            nano-results/*.log
+            nano-results/*.config
+          retention-days: 14
