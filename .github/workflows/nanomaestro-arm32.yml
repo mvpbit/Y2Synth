@@ -30,7 +30,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y g++-arm-linux-gnueabihf qemu-user time
       - name: Inspect pinned model and run x86 oracle
-        run: python experiments/nanomaestro-arm32/inspect.py
+        run: python experiments/nanomaestro-arm32/prepare_reference.py
       - name: Fetch ONNX Runtime release sources
         run: |
           git clone --branch v1.23.2 --depth 1 --recursive https://github.com/microsoft/onnxruntime.git ort-src
