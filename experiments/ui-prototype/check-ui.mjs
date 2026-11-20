@@ -91,7 +91,7 @@ const document = {
   addEventListener() {},
   querySelectorAll() { return []; },
 };
-await runInNewContext(readFileSync(new URL("./neural-common.js",import.meta.url),"utf8")+"\n(async()=>{\n" + script[1] + String.raw`
+await runInNewContext(["neural-common.js","nano-common.js","nano-flow.js"].map(file=>readFileSync(new URL("./"+file,import.meta.url),"utf8")).join("\n")+"\n(async()=>{\n" + script[1] + String.raw`
 const assertRuntime=(ok,message)=>{if(!ok)throw Error(message);};
 assertRuntime(!hasMusic(),"Fresh session must not contain demo notes");
 await transport();
@@ -99,17 +99,17 @@ assertRuntime(!state.playing&&audio.ctx===null,"Empty PLAY must not start audio"
 const homeMarkup=renderHome();
 assertRuntime((homeMarkup.match(/<button/g)||[]).length===1&&homeMarkup.includes("data-transport"),"HOME must contain only the transport button");
 assertRuntime(!homeMarkup.includes("data-step")&&!homeMarkup.includes("seq-row"),"HOME must not render a note grid");
-assertRuntime(choices.settings().map(row=>row.label).join(",")==="GENERATE ALL,DRUMS,PAD,PLUCK,FX,TEMPO","Settings must expose Generate All first and the five destinations");
+assertRuntime(choices.settings().map(row=>row.label).join(",")==="GENERATE ALL,FLOW,DRUMS,PAD,PLUCK,FX,TEMPO","Settings must expose Generate All first and the five destinations");
 assertRuntime(!choices.instruments,"No intermediate instrument submenu");
 for(const instrument of ["pluck","pad","drums"]){
   assertRuntime(choices[instrument]().every(row=>row.label.startsWith("GENERATE")||row.label==="LEVEL"),"No manual notes/demo controls");
 }
 assertRuntime(choices.fx().map(row=>row.key).join(",")==="delay,delaySteps,delayFeedback,delayWet,reverb,reverbSize,reverbDamping,reverbWet","FX controls must stay intact");
-activate();activate(3);
+activate();activate(4);
 assertRuntime(state.page==="pluck","OK navigation must reach PLUCK");
 back();assertRuntime(state.page==="settings","BACK must return directly to settings");
 for(const [index,page] of ["drums","pad","pluck","fx","tempo"].entries()){
-  activate(index+1);assertRuntime(state.page===page,"Direct settings destination: "+page);
+  activate(index+2);assertRuntime(state.page===page,"Direct settings destination: "+page);
   back();assertRuntime(state.page==="settings","Direct BACK from "+page);
 }
 home();
@@ -238,10 +238,10 @@ audio.drums=null;state.drumsLevel=1;
 home();
 wheelTurn(1);
 if (state.page !== "settings" || state.focus !== 0) throw new Error("Home wheel navigation");
-wheelTurn(4);
-if (state.focus !== 4) throw new Error("Clockwise scroll should select FX");
+wheelTurn(5);
+if (state.focus !== 5) throw new Error("Clockwise scroll should select FX");
 wheelTurn(-1);
-if (state.focus !== 3) throw new Error("Anticlockwise scroll should select PLUCK");
+if (state.focus !== 4) throw new Error("Anticlockwise scroll should select PLUCK");
 go("tempo");
 if (state.editing) throw new Error("New page must exit edit mode");
 activate();
@@ -317,6 +317,27 @@ applyPendingPatterns();
 assertRuntime(state.padKey.root===0&&state.pluck.notes[0].pitch%12===0&&state.drums.kick[0]===1,"All tracks must switch together");
 assertRuntime(JSON.stringify([state.drumsLevel,state.pluck.level,state.pad.level,state.fx])===savedLevels,"Generate All must preserve levels and FX");
 state.playing=false;
+// FLOW scheduling preserves loop snapshots and waits at a bar boundary on underrun.
+const savedFlowMusic=musicSnapshot(),savedFlowFx=JSON.stringify(state.fx);
+const played=[];
+const playSaved=playInstrumentNote,hitSaved=hitDrum;
+playInstrumentNote=(note,time,instrument)=>played.push({note,time,instrument});
+hitDrum=()=>{};
+audio.ctx={currentTime:0};state.playing=true;state.bpm=120;
+flow.enabled=true;flow.ready=true;flow.refill=()=>{};
+flow.queue=[[{step:.25,pitch:64,len:4,velocity:.5,instrument:"pluck"}]];
+flowBar=null;
+assertRuntime(scheduleStep(0,1)===true&&played.length===1&&played[0].time===1.03125,"FLOW must preserve 1/64 timing");
+assertRuntime(await generateAll()===false&&await generateDrums()===false,"FLOW must reject competing Magenta jobs");
+for(let step=1;step<16;step++)scheduleStep(step,1+step/8);
+assertRuntime(flowBar===null&&flow.queue.length===0,"FLOW must consume each bar only once");
+assertRuntime(scheduleStep(0,3)===false&&played.length===1,"Empty FLOW queue must buffer, not replay old notes");
+audio.step=0;audio.nextTime=-100;audio.ctx.currentTime=100;scheduler();
+assertRuntime(audio.step===0&&audio.nextTime>100,"Underrun/background resume must not fast-forward through missing bars");
+stopTransport();
+assertRuntime(!flow.enabled&&flow.queue.length===0&&!state.playing,"STOP must cancel FLOW");
+assertRuntime(musicSnapshot()===savedFlowMusic&&JSON.stringify(state.fx)===savedFlowFx,"FLOW must preserve saved loops and FX");
+playInstrumentNote=playSaved;hitDrum=hitSaved;audio.ctx=null;
 `+"\n})()", { document, window: {}, Worker: class { postMessage(message) {this.lastRequest=message;} terminate() {} }, setTimeout() {}, clearTimeout() {}, clearInterval() {} });
 
 // Real adapters are tested with polyphonic output at the model's 24 steps/beat.

@@ -94,8 +94,11 @@
 </div>
 <div class="hint">Drag around the ring with a mouse or finger · <kbd>Space</kbd> Play/Pause · <kbd>Enter</kbd> OK · <kbd>↑ ↓</kbd> rotate · <kbd>← →</kbd> Prev/Next · <kbd>Esc</kbd> back · <kbd>H</kbd> home</div>
 <div class="tag">480×360 is the exact UI grid in CSS pixels. Physical size on your monitor depends on DPI and browser zoom.</div>
-<div class="tag">Web Audio sound · Magenta neural generation · First use downloads models · Settings stay in memory.</div>
+<div class="tag">Web Audio · Magenta + NanoMaestro FLOW · First use downloads models · Settings stay in memory.</div>
+<div class="tag">FLOW model: <a href="https://huggingface.co/utkucoban/NanoMaestro-Realtime" target="_blank" rel="noopener">NanoMaestro Light by Utku Coban</a> · <a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener">CC BY-NC 4.0</a> · Event decoding and synth orchestration adapted for Y2Synth.</div>
 <script src="neural-common.js"></script>
+<script src="nano-common.js"></script>
+<script src="nano-flow.js"></script>
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
@@ -113,6 +116,20 @@ const state = {
 const inRange=(value,min,max)=>Math.max(min,Math.min(max,value));
 const format=(v)=>Number(v).toFixed(2);
 function inform(message){state.message=message; $("screen-message").textContent=message;}
+function startVoice(source,time,end){
+  if(flow.enabled&&audio.voices.size>=256){
+    const oldest=audio.voices.values().next().value;
+    try{oldest.stop();}catch{}
+    audio.voices.delete(oldest);
+  }
+  audio.voices.add(source);
+  source.onended=()=>{audio.voices.delete(source);source.disconnect();};
+  source.start(time);source.stop(end);
+}
+function stopVoices(){
+  for(const source of audio.voices){try{source.stop();}catch{}}
+  audio.voices.clear();audio.generation++;
+}
 function tone(freq,time,duration,gain,type="sine",peakDelay=.01,target=null){
   const ctx=audio.ctx;
   const osc=ctx.createOscillator(),env=ctx.createGain();
@@ -121,7 +138,7 @@ function tone(freq,time,duration,gain,type="sine",peakDelay=.01,target=null){
   env.gain.exponentialRampToValueAtTime(Math.max(gain,.0002),time+peakDelay);
   env.gain.exponentialRampToValueAtTime(.0001,time+duration);
   osc.connect(env).connect(target||audio.mix);
-  osc.start(time);osc.stop(time+duration+.02);
+  startVoice(osc,time,time+duration+.02);
 }
 function noise(time,duration,gain,cutoff,kind,target=null){
   const ctx=audio.ctx;
@@ -130,9 +147,9 @@ function noise(time,duration,gain,cutoff,kind,target=null){
   env.gain.setValueAtTime(Math.max(gain,.0002),time);
   env.gain.exponentialRampToValueAtTime(.0001,time+duration);
   source.connect(filter).connect(env).connect(target||audio.mix);
-  source.start(time);source.stop(time+duration+.01);
+  startVoice(source,time,time+duration+.01);
 }
-const audio={ctx:null, timer:null, nextTime:0, step:0, mix:null, drums:null,
+const audio={ctx:null, timer:null, nextTime:0, step:0, mix:null, drums:null, voices:new Set(), generation:0,
             delay:null,feedback:null,delayWet:null,convolver:null,reverbWet:null,analyser:null,noise:null};
 function makeImpulse(ctx,size,damping){
   const length=Math.floor(ctx.sampleRate*(.5+size*2.6));
@@ -200,7 +217,7 @@ function hitDrum(voice,time){
     osc.frequency.exponentialRampToValueAtTime(46,time+.14);
     env.gain.setValueAtTime(.0001,time);env.gain.exponentialRampToValueAtTime(.75,time+.004);
     env.gain.exponentialRampToValueAtTime(.0001,time+.32);
-    osc.connect(env).connect(audio.drums);osc.start(time);osc.stop(time+.34);
+    osc.connect(env).connect(audio.drums);startVoice(osc,time,time+.34);
   }else if(voice==="snare"){
     noise(time,.19,.42,1050,"highpass",audio.drums);
     tone(183,time,.13,.14,"triangle",.01,audio.drums);
@@ -228,48 +245,90 @@ function playInstrumentNote(note,time,instrument){
         env.gain.linearRampToValueAtTime(vol,time+attack);
         env.gain.setValueAtTime(vol,time+gate);
         env.gain.exponentialRampToValueAtTime(.0001,time+gate+release);
-        osc.connect(env).connect(audio.mix);osc.start(time);osc.stop(time+gate+release+.03);
+        osc.connect(env).connect(audio.mix);startVoice(osc,time,time+gate+release+.03);
       });
     });
   }
 }
+let flowBar=null,flowStarting=false,flowIntent=0,flowBuffering=false;
+const flow=new NanoFlow({
+  onStatus:message=>{if(!state.playing){inform(message);render();}},
+  onError:error=>{stopTransport();inform("FLOW: "+error.message);render();}
+});
+async function toggleFlow(){
+  if(flow.enabled||flowStarting){stopTransport();inform("FLOW OFF · saved loops kept");render();return;}
+  if(state.generating){inform("Wait for instrument generation");return;}
+  stopTransport();
+  const intent=++flowIntent;flowStarting=true;
+  inform("FLOW · loading NanoMaestro…");render();
+  try{
+    initAudio();await audio.ctx.resume();
+    if(intent!==flowIntent)return;
+    resetNeuralWorker();
+    const ready=await flow.start(state.bpm);
+    if(intent!==flowIntent||!ready)return;
+    flowStarting=false;flowBar=null;audio.step=0;
+    await transport();
+  }catch(error){
+    if(intent===flowIntent){flow.stop();inform("FLOW: "+error.message);}
+  }finally{if(intent===flowIntent){flowStarting=false;render();}}
+}
 function scheduleStep(index,time){
   if(index===0)applyPendingPatterns();
+  if(flow.enabled){
+    if(index===0&&!flowBar){
+      flowBar=flow.takeBar();
+      if(!flowBar){
+        if(!flowBuffering)inform("FLOW · buffering…");
+        flowBuffering=true;return false;
+      }
+      flowBuffering=false;inform("FLOW · NanoMaestro");
+    }
+    for(const note of flowBar||[]){
+      if(note.step>=index&&note.step<index+1)
+        playInstrumentNote(note,time+(note.step-index)*60/state.bpm/4,note.instrument);
+    }
+    if(index===15)flowBar=null;
+  }
   for(const key of ["kick","snare","hat"]){
     if(state.drums[key].includes(index))hitDrum(key,time);
   }
-  for(const track of ["pluck","pad"]){
+  if(!flow.enabled)for(const track of ["pluck","pad"]){
     for(const note of state[track].notes){
       if(note.step===index)playInstrumentNote(note,time,track);
     }
   }
-  const delta=Math.max(0,(time-audio.ctx.currentTime)*1000);
+  const delta=Math.max(0,(time-audio.ctx.currentTime)*1000),generation=audio.generation;
   setTimeout(()=>{
-    if(!state.playing)return;
+    if(!state.playing||generation!==audio.generation)return;
     state.playhead=index;
     $("screen-step").textContent=state.page==="home"?"":String(index+1).padStart(2,"0")+" / 16";
   },delta);
+  return true;
 }
 function scheduler(){
   if(!state.playing)return;
   const ctx=audio.ctx;
+  // A background tab must not schedule minutes of missed audio in one burst.
+  if(audio.nextTime<ctx.currentTime-.2)audio.nextTime=ctx.currentTime+.065;
   while(audio.nextTime<ctx.currentTime+.10){
-    scheduleStep(audio.step,audio.nextTime);
+    if(scheduleStep(audio.step,audio.nextTime)===false){audio.nextTime=ctx.currentTime+.065;return;}
     audio.nextTime+=60/state.bpm/4;
     audio.step=(audio.step+1)%16;
   }
 }
 function hasMusic(){
-  return state.pluck.notes.length>0||state.pad.notes.length>0||Object.values(state.drums).some(steps=>steps.length>0);
+  return (flow.enabled&&flow.ready)||state.pluck.notes.length>0||state.pad.notes.length>0||Object.values(state.drums).some(steps=>steps.length>0);
 }
 async function transport(){
+  if(flowStarting){inform("FLOW · loading; select FLOW again to cancel");return;}
   if(!state.playing&&!hasMusic()){
     inform("OK → settings · generate an instrument");return;
   }
   if(state.playing){
     state.playing=false;
     state.paused=true;applyPendingPatterns();
-    clearInterval(audio.timer);audio.timer=null;
+    clearInterval(audio.timer);audio.timer=null;stopVoices();
     inform("PAUSE · press ▶Ⅱ to resume");
   }else{
     try{initAudio();await audio.ctx.resume();}
@@ -278,11 +337,12 @@ async function transport(){
     state.playing=true;state.paused=false;
     audio.nextTime=audio.ctx.currentTime+.065;
     audio.timer=setInterval(scheduler,24);scheduler();
-    inform("PLAY · 16 steps");
+    inform(flow.enabled?"FLOW · NanoMaestro":"PLAY · 16 steps");
   }
   render();
 }
 function stopTransport(){
+  flowIntent++;flowStarting=false;flow.stop();flowBar=null;flowBuffering=false;stopVoices();
   clearInterval(audio.timer);audio.timer=null;
   state.playing=false;state.paused=false;state.playhead=0;applyPendingPatterns();
   audio.step=0;
@@ -362,6 +422,7 @@ function applyPendingPatterns(){
   alignPluck();render();
 }
 async function generateAll(){
+  if(flow.enabled||flowStarting){inform("Turn FLOW off to generate loops");return false;}
   if(state.generating){inform("Generation already running");return false;}
   state.generating=true;
   const revisions={};
@@ -397,6 +458,7 @@ async function generateAll(){
   }finally{state.generating=false;render();}
 }
 async function generateTrack(track){
+  if(flow.enabled||flowStarting){inform("Turn FLOW off to generate loops");return false;}
   if(track==="pluck"&&!hasPad()){inform("Generate PAD first to set the harmony");return false;}
   if(state.generating){inform("Generation already running");return false;}
   state.generating=true;
@@ -432,7 +494,8 @@ function back(){
 function home(){state.page="home";state.stack=[];state.focus=0;state.editing=false;render();}
 const choices={
   settings:()=>[
-    {label:"GENERATE ALL",disabled:state.generating,action:()=>{generateAll();}},
+    {label:"GENERATE ALL",disabled:state.generating||flow.enabled||flowStarting,action:()=>{generateAll();}},
+    {label:"FLOW",value:flowStarting?"LOADING":flow.enabled?"ON":"OFF",disabled:state.generating,action:()=>{toggleFlow();}},
     {label:"DRUMS",action:()=>go("drums")},
     {label:"PAD",action:()=>go("pad")},
     {label:"PLUCK",action:()=>go("pluck")},
@@ -440,15 +503,15 @@ const choices={
     {label:"TEMPO",sub:state.bpm+" BPM",action:()=>go("tempo")},
   ],
   pluck:()=>[
-    {label:"GENERATE PLUCK",disabled:state.generating||!hasPad(),action:()=>{generateInstrument("pluck");render();}},
+    {label:"GENERATE PLUCK",disabled:state.generating||flow.enabled||flowStarting||!hasPad(),action:()=>{generateInstrument("pluck");render();}},
     {label:"LEVEL",sub:"◀ / ▶ · Pluck level",value:format(state.pluck.level),key:"pluckLevel"},
   ],
   pad:()=>[
-    {label:"GENERATE PAD",disabled:state.generating,action:()=>{generateInstrument("pad");render();}},
+    {label:"GENERATE PAD",disabled:state.generating||flow.enabled||flowStarting,action:()=>{generateInstrument("pad");render();}},
     {label:"LEVEL",sub:"◀ / ▶ · Pad level",value:format(state.pad.level),key:"padLevel"},
   ],
   drums:()=>[
-    {label:"GENERATE DRUMS",disabled:state.generating,action:()=>{generateDrums();render();}},
+    {label:"GENERATE DRUMS",disabled:state.generating||flow.enabled||flowStarting,action:()=>{generateDrums();render();}},
     {label:"LEVEL",sub:"◀ / ▶ · Drums level",value:format(state.drumsLevel),key:"drumsLevel"},
   ],
   tempo:()=>[{label:"BPM",sub:"◀ / ▶ adjusts by 2 BPM",value:state.bpm,key:"bpm"}],
@@ -534,7 +597,7 @@ function renderHome(){
   return '<div class="home-view"><button class="home-play" data-transport aria-label="'+
     (state.playing?"Pause":"Play")+'">'+(state.playing?"PAUSE":"PLAY")+
     ' <span>'+(state.playing?"Ⅱ":"▶")+'</span></button>'+
-    '<div class="sub">OK → settings</div></div>';
+    '<div class="sub">'+(flowStarting?'FLOW · loading…':flow.enabled?'FLOW · continuous generation':'OK → settings')+'</div></div>';
 }
 function render(){
   $("screen-tempo").textContent=state.bpm+" BPM";
