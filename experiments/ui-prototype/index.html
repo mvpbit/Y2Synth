@@ -94,11 +94,10 @@
 </div>
 <div class="hint">Drag around the ring with a mouse or finger · <kbd>Space</kbd> Play/Pause · <kbd>Enter</kbd> OK · <kbd>↑ ↓</kbd> rotate · <kbd>← →</kbd> Prev/Next · <kbd>Esc</kbd> back · <kbd>H</kbd> home</div>
 <div class="tag">480×360 is the exact UI grid in CSS pixels. Physical size on your monitor depends on DPI and browser zoom.</div>
-<div class="tag">Web Audio · Magenta + NanoMaestro FLOW · First use downloads models · Settings stay in memory.</div>
-<div class="tag">FLOW model: <a href="https://huggingface.co/utkucoban/NanoMaestro-Realtime" target="_blank" rel="noopener">NanoMaestro Light by Utku Coban</a> · <a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener">CC BY-NC 4.0</a> · Event decoding and synth orchestration adapted for Y2Synth.</div>
+<div class="tag">FLOW · Ambient pulse · First use downloads models.</div>
 <script src="neural-common.js"></script>
-<script src="nano-common.js"></script>
-<script src="nano-flow.js"></script>
+<script src="ambient-validator.js"></script>
+<script src="ambient-flow.js"></script>
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
@@ -251,7 +250,7 @@ function playInstrumentNote(note,time,instrument){
   }
 }
 let flowBar=null,flowStarting=false,flowIntent=0,flowBuffering=false;
-const flow=new NanoFlow({
+const flow=new AmbientFlow({
   onStatus:message=>{if(!state.playing){inform(message);render();}},
   onError:error=>{stopTransport();inform("FLOW: "+error.message);render();}
 });
@@ -260,7 +259,7 @@ async function toggleFlow(){
   if(state.generating){inform("Wait for instrument generation");return;}
   stopTransport();
   const intent=++flowIntent;flowStarting=true;
-  inform("FLOW · loading NanoMaestro…");render();
+  inform("FLOW · loading ambient instruments…");render();
   try{
     initAudio();await audio.ctx.resume();
     if(intent!==flowIntent)return;
@@ -282,16 +281,21 @@ function scheduleStep(index,time){
         if(!flowBuffering)inform("FLOW · buffering…");
         flowBuffering=true;return false;
       }
-      flowBuffering=false;inform("FLOW · NanoMaestro");
+      flowBuffering=false;inform("FLOW · Ambient pulse");
     }
     for(const note of flowBar||[]){
       if(note.step>=index&&note.step<index+1)
-        playInstrumentNote(note,time+(note.step-index)*60/state.bpm/4,note.instrument);
+        {
+          const when=time+(note.step-index)*60/state.bpm/4;
+          if(note.instrument==="pulse") tone(53,when,.27,.24*note.velocity,"sine",.015,audio.drums);
+          else if(note.instrument==="tick") noise(when,.05,.10*note.velocity,4600,"highpass",audio.drums);
+          else playInstrumentNote(note,when,note.instrument);
+        }
     }
     if(index===15)flowBar=null;
   }
   for(const key of ["kick","snare","hat"]){
-    if(state.drums[key].includes(index))hitDrum(key,time);
+    if(!flow.enabled&&state.drums[key].includes(index))hitDrum(key,time);
   }
   if(!flow.enabled)for(const track of ["pluck","pad"]){
     for(const note of state[track].notes){
@@ -341,7 +345,7 @@ async function transport(){
     state.playing=true;state.paused=false;
     audio.nextTime=audio.ctx.currentTime+.065;
     audio.timer=setInterval(scheduler,24);scheduler();
-    inform(flow.enabled?"FLOW · NanoMaestro":"PLAY · 16 steps");
+    inform(flow.enabled?"FLOW · Ambient pulse":"PLAY · 16 steps");
   }
   render();
 }

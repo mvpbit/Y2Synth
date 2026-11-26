@@ -91,7 +91,7 @@ const document = {
   addEventListener() {},
   querySelectorAll() { return []; },
 };
-await runInNewContext(["neural-common.js","nano-common.js","nano-flow.js"].map(file=>readFileSync(new URL("./"+file,import.meta.url),"utf8")).join("\n")+"\n(async()=>{\n" + script[1] + String.raw`
+await runInNewContext(["neural-common.js","ambient-validator.js","ambient-flow.js"].map(file=>readFileSync(new URL("./"+file,import.meta.url),"utf8")).join("\n")+"\n(async()=>{\n" + script[1] + String.raw`
 const assertRuntime=(ok,message)=>{if(!ok)throw Error(message);};
 assertRuntime(!hasMusic(),"Fresh session must not contain demo notes");
 await transport();

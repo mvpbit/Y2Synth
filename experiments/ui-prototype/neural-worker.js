@@ -1,7 +1,7 @@
 "use strict";
 // All inference runs outside the UI/audio scheduling thread. Official pinned
 // Magenta implementations, with separate model objects for the three tracks.
-importScripts("neural-common.js");
+importScripts("neural-common.js","ambient.js");
 const CHECKPOINTS={
   drums:"music_rnn/drum_kit_rnn",
   pluck:"music_rnn/melody_rnn",
@@ -33,7 +33,7 @@ async function generate(request){
   }
   postMessage({id,status:"Generating "+track.toUpperCase()+"…"});
   const model=models[track];
-  const key=track==="pad"?NeuralPatterns.randomKey(request.previousKey):null;
+  const key=track==="pad"?(request.flowKey || NeuralPatterns.randomKey(request.previousKey)):null;
   const chord=key?NeuralPatterns.chordFor(key):null;
   let lastError;
   for(let attempt=0;attempt<3;attempt++){
@@ -48,14 +48,31 @@ async function generate(request){
       }
       const pattern=track==="drums"?NeuralPatterns.drumNotes(sequence):
         NeuralPatterns.instrumentNotes(sequence,track,key||undefined);
-      postMessage({id,pattern,chord,key,model:CHECKPOINTS[track].split("/")[1]});
-      return;
+      return {id,pattern,chord,key,model:CHECKPOINTS[track].split("/")[1]};
     }catch(error){lastError=error;}
   }
   throw lastError||Error("Generation failed");
 }
-self.onmessage=event=>{
-  generate(event.data).catch(error=>postMessage({
-    id:event.data.id,error:error?.message||String(error)
-  }));
+let section = null, sectionKey = null, barsGenerated = 0;
+async function flowBatch(request) {
+  if (request.command === "start") {
+    section = null;
+    sectionKey = null;
+    barsGenerated = 0;
+  }
+  if (!section || section.bar === 8) {
+    // Keep the session key across sections, so new phrases share their harmony.
+    const pad = await generate({id:request.id,track:"pad",flowKey:sectionKey});
+    const pluck = await generate({id:request.id,track:"pluck"});
+    const drums = await generate({id:request.id,track:"drums"});
+    section = new AmbientSection(pad,pluck,drums);
+    sectionKey = pad.key;
+  }
+  const bars = [section.next(),section.next()];
+  barsGenerated += bars.length;
+  return {id:request.id,bars,barsGenerated};
+}
+self.onmessage = async ({data}) => {
+  try { postMessage(await (data.command ? flowBatch(data) : generate(data))); }
+  catch(error) { postMessage({id:data.id,error:error?.message || String(error)}); }
 };
