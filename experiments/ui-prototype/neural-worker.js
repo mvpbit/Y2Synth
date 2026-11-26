@@ -43,7 +43,7 @@ async function generate(request){
         [sequence]=await model.sample(1,.8,{chordProgression:[chord]},24);
       }else{
         // One internal silent bootstrap step, never a hand-written user phrase.
-        const primer={notes:[],quantizationInfo:{stepsPerQuarter:4},totalQuantizedSteps:1};
+        const primer=request.primer || {notes:[],quantizationInfo:{stepsPerQuarter:4},totalQuantizedSteps:1};
         sequence=await model.continueSequence(primer,16,track==="drums"?1.2:1.05);
       }
       const pattern=track==="drums"?NeuralPatterns.drumNotes(sequence):
@@ -53,23 +53,32 @@ async function generate(request){
   }
   throw lastError||Error("Generation failed");
 }
-let section = null, sectionKey = null, barsGenerated = 0;
+let stream, barsGenerated, nextHarmony, nextTexture;
 async function flowBatch(request) {
+  const generateTrack = (track, extra={}) => generate({id:request.id,track,...extra});
   if (request.command === "start") {
-    section = null;
-    sectionKey = null;
+    const pad = await generateTrack("pad");
+    stream = new AmbientStream(pad.key);
+    stream.setHarmony(pad.pattern);
+    stream.hats = (await generateTrack("drums")).pattern.hat;
     barsGenerated = 0;
+    nextHarmony = stream.harmonyFor;
+    nextTexture = 5 + Math.floor(Math.random()*7);
   }
-  if (!section || section.bar === 8) {
-    // Keep the session key across sections, so new phrases share their harmony.
-    const pad = await generate({id:request.id,track:"pad",flowKey:sectionKey});
-    const pluck = await generate({id:request.id,track:"pluck"});
-    const drums = await generate({id:request.id,track:"drums"});
-    section = new AmbientSection(pad,pluck,drums);
-    sectionKey = pad.key;
+  const bars = [];
+  while (bars.length < 2) {
+    if (barsGenerated === nextHarmony) {
+      stream.setHarmony((await generateTrack("pad",{flowKey:stream.key})).pattern);
+      nextHarmony += stream.harmonyFor;
+    }
+    if (barsGenerated === nextTexture) {
+      stream.hats = (await generateTrack("drums")).pattern.hat;
+      nextTexture += 5 + Math.floor(Math.random()*7);
+    }
+    const melody = await generateTrack("pluck",{primer:stream.primer()});
+    bars.push(stream.next(melody.pattern));
+    barsGenerated++;
   }
-  const bars = [section.next(),section.next()];
-  barsGenerated += bars.length;
   return {id:request.id,bars,barsGenerated};
 }
 self.onmessage = async ({data}) => {

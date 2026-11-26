@@ -31,6 +31,7 @@ jobs:
       - name: Validate native 480x360 UI and JavaScript
         run: |
           node experiments/ui-prototype/check-ui.mjs
+          node experiments/ui-prototype/check-stream.mjs
           node experiments/ui-prototype/check-nano.mjs
 
       - name: Install Chromium test runner
